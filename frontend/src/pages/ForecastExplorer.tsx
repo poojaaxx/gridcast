@@ -43,12 +43,20 @@ export default function ForecastExplorer() {
       }),
     ]);
 
-    // Multiple forecasts can target the same timestamp (re-issued as time
-    // advances). Keep the one with the smallest horizon - i.e. the most
-    // recently issued, most information-rich prediction - for a clean line.
+    // A single `horizon`-hour forecast run persists ONE ROW PER STEP - e.g.
+    // requesting a 24h forecast writes rows with horizon_hours 1..24, not a
+    // single row with horizon_hours===24. To render the full curve out to the
+    // selected horizon we must keep every step up to and including it, not
+    // just the one row whose horizon_hours happens to equal it exactly
+    // (that earlier `!==` filter kept ~1 point per batch, which is why
+    // avg/peak predicted load collapsed to a single value).
+    //
+    // Multiple forecasts can also target the same timestamp (re-issued as
+    // time advances); keep whichever was generated most recently for a
+    // clean, non-overlapping line.
     const bestByTarget = new Map<string, (typeof history)[number]>();
     for (const f of history) {
-      if (f.horizon_hours !== horizon) continue;
+      if (f.horizon_hours > horizon) continue;
       const existing = bestByTarget.get(f.target_timestamp);
       if (!existing || f.generated_at > existing.generated_at) bestByTarget.set(f.target_timestamp, f);
     }
