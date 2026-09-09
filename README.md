@@ -230,7 +230,76 @@ Dark, data-dense analytics UI built with React + Tailwind + Recharts.
 
 > Screenshots: `docs/screenshots/*.png` (add your own after running `make demo`).
 
-The dashboard never fabricates data — every chart reads from the FastAPI backend. When a region has no data yet, pages show an explicit empty state with a **"Generate Demo Data"** action that ingests history, trains all three models, and generates initial forecasts directly from the UI.
+The dashboard never fabricates data — every chart reads from the FastAPI backend. When a region has no data yet, public visitors see an explicit empty state pointing them to sign in as an administrator; signed-in admins see a **"Generate Demo Data"** action right there that ingests history, trains all three models, and generates initial forecasts.
+
+There is also a dedicated **[Admin Console](#security--access-control)** (`/admin`, sign-in required) for running these same operations deliberately, one at a time, with full visibility into what happened.
+
+---
+
+## Security & Access Control
+
+GridCast's dashboards are intentionally public and read-only — anyone can open `http://localhost:5173` and watch forecasts, accuracy trends, and drift status with no account. Everything that *writes* — ingesting data, training a model, generating a forecast, scoring evaluations — requires an authenticated **admin** session, enforced independently by the backend on every request (not just hidden in the React UI).
+
+```mermaid
+flowchart TD
+    U[User] --> L[POST /auth/login]
+    L --> S["Authenticated Session\n(HttpOnly JWT cookie)"]
+    S --> R{Role Check\non every request}
+    R -->|analyst / anonymous| V["Read-only Dashboard\n(GET endpoints - always public)"]
+    R -->|admin| A[Admin Console]
+    A --> O["Ingest / Train / Forecast / Score\n(POST endpoints - admin only)"]
+    O --> AU[(Audit Log)]
+```
+
+### Roles
+
+| Role | Can do |
+|---|---|
+| *(anonymous — no login)* | View every dashboard page and read-only API endpoint (`GET /data/*`, `/forecasts/*`, `/evaluation/*`, `/models`, `/regions`) |
+| `analyst` | Same as anonymous today, plus a valid session (`GET /auth/me`). A real, separate role from `admin` in the schema so the boundary is provably enforced (see `tests/test_auth.py::test_protected_admin_endpoint_with_analyst_returns_403`) — future features that need "logged in but not admin" slot in without a schema change. |
+| `admin` | Everything above, plus every mutating endpoint (`POST /data/ingest`, `/models/train`, `/forecasts/generate`, `/evaluation/score`, `/regions`) and the Admin Console (`/admin`). |
+
+### How sessions work
+
+- Passwords are hashed with **Argon2id** (via `argon2-cffi`) — never stored or returned in plaintext, and never included in any API response (see `UserOut`/`AuditLogOut` schemas).
+- A successful login sets a short-lived (`JWT_EXPIRE_MINUTES`, default 8h), signed JWT in an **HttpOnly cookie** (`gridcast_session`). The frontend's JavaScript never reads or stores this token — no `localStorage`, no `Authorization` header to leak. This also means there's no refresh-token flow to build: the session simply expires after `JWT_EXPIRE_MINUTES` and the user signs in again. That's a deliberate simplicity trade-off for this project's scope; a longer-lived product would add refresh rotation.
+- Every protected route independently re-derives the user from that cookie via a FastAPI dependency chain (`get_current_user` → `require_user` → `require_admin` in `app/api/deps.py`) and hits the database — there is no way to forge admin access by manipulating the frontend, since the frontend never decides authorization, only reflects it.
+- A 401 from any request clears the frontend's local auth state and (for protected routes) redirects to `/login`; a 403 renders a real "Access denied" page rather than silently hiding content.
+
+### Admin bootstrap
+
+No hardcoded default credentials exist anywhere in the codebase. The first admin is created from environment variables:
+
+```bash
+GRIDCAST_ADMIN_USERNAME=admin
+GRIDCAST_ADMIN_PASSWORD=<a strong password of your choosing>
+```
+
+Set these in `.env` and the backend creates that admin automatically on startup (idempotent — safe to leave set across every restart; it will never overwrite an existing account or create a duplicate). To bootstrap without restarting the server:
+
+```bash
+make create-admin   # python -m app.tasks.bootstrap_admin
+```
+
+**For any real deployment**, supply `GRIDCAST_ADMIN_PASSWORD` and `JWT_SECRET_KEY` through your platform's secret manager (not a committed `.env`), and generate `JWT_SECRET_KEY` with something like `openssl rand -hex 32`.
+
+### CORS & security headers
+
+- `CORS_ORIGINS` is an explicit allowlist (never `*`) — required anyway once cookies are involved, since `allow_credentials=True` and a wildcard origin are mutually exclusive in the CORS spec.
+- Every response carries `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: strict-origin-when-cross-origin`. No `Content-Security-Policy` is set — this API serves JSON only (the frontend is a separate SPA with its own build/serving pipeline), so a CSP here would add complexity without protecting anything real.
+- `COOKIE_SECURE=false` and `COOKIE_SAMESITE=lax` are correct for local HTTP development (frontend/backend both on `localhost`, different ports — cookies key off the registrable domain, not the port, so `lax` covers this). **In production over HTTPS, set `COOKIE_SECURE=true`**; if the frontend and backend ever live on genuinely different domains, use `COOKIE_SAMESITE=none` (which requires `COOKIE_SECURE=true`).
+
+### Login rate limiting
+
+Failed login attempts are tracked in-memory per `(username, client IP)` and locked out after `LOGIN_RATE_LIMIT_MAX_ATTEMPTS` (default 10) within `LOGIN_RATE_LIMIT_WINDOW_SECONDS` (default 15 minutes) — enough to stop trivial brute-forcing without adding infrastructure. This is intentionally lightweight: it's process-local state, so it resets on restart and wouldn't coordinate across multiple backend replicas. The app runs as a single Uvicorn process today (see `docker-compose.yml`), so this is sufficient; a genuinely multi-instance deployment would want a shared store (Redis) for this instead, which was deliberately **not** introduced here to avoid infrastructure this project doesn't otherwise need.
+
+### Audit log
+
+Every admin action — login, logout, ingest, train, generate, score, region creation — writes an `audit_logs` row: who, what, when, and success/failure (with a small non-secret detail summary, e.g. record counts). It's visible in the Admin Console's **Audit Activity** panel and never stores passwords, tokens, or other secrets. CLI tasks (`make seed`, `make train`, `make demo`, etc.) call the same services directly and bypass the HTTP/auth layer entirely — they are **not** audit-logged, since there's no authenticated request to attribute them to. Treat those as trusted local/operator commands, and the Admin Console as the audited path for anything that matters in a shared deployment.
+
+### Live vs. demo data
+
+`GET /health` and the Admin Console's System Status both expose `data_mode`: `"demo"` when `ELECTRICITY_PROVIDER=synthetic` (the default — see [Data Pipeline](#data-pipeline)), or `"live"` when a real provider is configured. The dashboard topbar shows this as a visible **Demo Data / Live Data** badge at all times so synthetic data is never mistaken for a real feed. Switching to live data means configuring `EIA_API_KEY` (or another real electricity provider) and setting `ELECTRICITY_PROVIDER=real` — GridCast will never fabricate a live feed in place of a missing one.
 
 ---
 
@@ -251,7 +320,15 @@ make migrate   # applies Alembic migrations
 - Frontend: http://localhost:5173
 - Backend / API docs: http://localhost:8000/docs
 
-Then populate it:
+Create your first admin (see [Security & Access Control](#security--access-control)):
+
+```bash
+# Set GRIDCAST_ADMIN_USERNAME / GRIDCAST_ADMIN_PASSWORD in .env, then either
+# restart the backend (it bootstraps automatically) or run:
+make create-admin
+```
+
+Then sign in at http://localhost:5173/login and populate data from the Admin Console, or use the CLI:
 
 ```bash
 make seed       # ingest ~180 days of load + weather
@@ -289,24 +366,32 @@ make simulate   # python -m app.tasks.simulate_live --region demo-region --hours
 
 Interactive OpenAPI docs: **http://localhost:8000/docs**
 
-Key endpoints:
+Key endpoints (🔒 = requires an authenticated admin session; everything else is public):
 
 ```
-GET  /health
-GET  /regions                      POST /regions
+GET  /health                       includes data_mode: "live" | "demo"
+
+POST /auth/login                   {username, password} - sets HttpOnly session cookie
+POST /auth/logout
+GET  /auth/me                      current session's user, or 401
+
+GET  /regions                      🔒 POST /regions
 GET  /data/load?region=&start=&end=
 GET  /data/weather?region=&start=&end=
-POST /data/ingest                  {region, days}
+🔒 POST /data/ingest                  {region, days}
 GET  /models                       GET /models/{id}
-POST /models/train                 {region, model_type}
-POST /forecasts/generate           {region, model_version, horizon_hours}
+🔒 POST /models/train                 {region, model_type}
+🔒 POST /forecasts/generate           {region, model_version, horizon_hours}
 GET  /forecasts/latest?region=
 GET  /forecasts/history?region=
-POST /evaluation/score             {region}
+🔒 POST /evaluation/score             {region}
 GET  /evaluation/summary?region=
 GET  /evaluation/timeseries?region=&granularity=day|week
 GET  /evaluation/model-comparison?region=
 GET  /evaluation/drift?region=&model_type=
+
+🔒 GET /admin/status                  environment, data_mode, last ingest/forecast/eval timestamps
+🔒 GET /admin/audit-log?limit=
 ```
 
 ## Project Structure
@@ -315,27 +400,29 @@ GET  /evaluation/drift?region=&model_type=
 gridcast/
 ├── backend/
 │   ├── app/
-│   │   ├── api/routes/       # FastAPI routers
-│   │   ├── core/             # config, logging
+│   │   ├── api/
+│   │   │   ├── routes/       # FastAPI routers (incl. auth.py, admin.py)
+│   │   │   └── deps.py       # get_current_user / require_user / require_admin
+│   │   ├── core/             # config, logging, security.py (hashing + JWT)
 │   │   ├── db/                # engine/session, declarative base
-│   │   ├── models/           # SQLAlchemy ORM models
+│   │   ├── models/           # SQLAlchemy ORM models (incl. User, AuditLog)
 │   │   ├── schemas/          # Pydantic request/response models
 │   │   ├── ingestion/        # provider abstraction + pipeline
 │   │   ├── ml/
 │   │   │   ├── features/     # calendar, lag, rolling, weather features
 │   │   │   ├── models/       # seasonal naive, linear, lightgbm
 │   │   │   └── evaluation/   # metrics, walk-forward validation
-│   │   ├── services/         # training, forecasting, evaluation orchestration
-│   │   ├── tasks/            # CLI entry points (train_all, simulate_live, ...)
+│   │   ├── services/         # training, forecasting, evaluation, auth, audit
+│   │   ├── tasks/            # CLI entry points (train_all, bootstrap_admin, ...)
 │   │   └── utils/
 │   ├── alembic/               # migrations
-│   └── tests/
+│   └── tests/                 # incl. test_auth.py
 ├── frontend/
 │   └── src/
-│       ├── components/       # MetricCard, ForecastChart, DriftStatus, ...
-│       ├── pages/            # Overview, ForecastExplorer, ModelPerformance, ...
-│       ├── services/api.ts   # typed API client
-│       ├── state/            # RegionProvider, demo bootstrap hook
+│       ├── components/       # MetricCard, ForecastChart, ProtectedRoute, ConfirmDialog, ...
+│       ├── pages/            # Overview, ForecastExplorer, ..., Login, Admin
+│       ├── services/api.ts   # typed API client (credentials: "include")
+│       ├── state/            # RegionProvider, AuthProvider, demo bootstrap hook
 │       └── types/
 ├── data/models/               # trained model artifacts (joblib)
 ├── docker-compose.yml
@@ -359,6 +446,7 @@ Database-backed tests (require Postgres — run automatically in the backend con
 
 - **Ingestion** — re-ingesting identical records inserts zero duplicates; partial-overlap batches insert only the new rows; the DB-level unique constraint rejects duplicate `(region_id, timestamp)` rows.
 - **Evaluation** — a forecast is scored against the correct matching actual; a forecast can never be scored twice, even across repeated scoring runs.
+- **Auth** (`test_auth.py`) — login success/invalid password/unknown user/inactive user; a protected endpoint returns 401 unauthenticated and 403 for a non-admin; an admin can reach it; logout and `/auth/me` behave correctly; admin bootstrap is idempotent; password hashes are never returned in any response; audit log rows are created for login/admin actions and never contain secrets.
 
 ## Future Improvements
 
@@ -369,3 +457,6 @@ Database-backed tests (require Postgres — run automatically in the backend con
 - Cloud deployment (ECS/Cloud Run + managed Postgres)
 - Multi-region support with per-region model selection
 - Real grid operator API integration (CAISO, PJM, ERCOT, etc.) as an additional `ElectricityDataProvider`
+- Redis-backed login rate limiting for genuinely multi-instance deployments (today's in-memory limiter is single-process by design)
+- Refresh-token rotation for longer-lived sessions without lengthening the access token's blast radius
+- Per-action audit metadata for CLI-triggered operations (`make demo`, `make train`, ...), which currently bypass the HTTP/audit layer entirely
