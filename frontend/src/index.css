@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-base-950 text-slate-200 antialiased;
+  }
+  ::selection {
+    @apply bg-accent-500/30 text-white;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-base-700 rounded-full;
+  }
+
+  /* Visible, consistent keyboard focus everywhere - never rely on color alone. */
+  :focus-visible {
+    outline: 2px solid theme("colors.accent.500");
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* ---- Surfaces ---- */
+  .app-shell {
+    @apply bg-base-950 bg-grid-pattern bg-grid;
+    background-position: center top;
+    -webkit-mask-image: linear-gradient(to bottom, black, black 40%, transparent 100%);
+    mask-image: linear-gradient(to bottom, black, black 40%, transparent 100%);
+  }
+  .panel {
+    @apply bg-base-850 border border-base-700/70 rounded-xl shadow-panel;
+  }
+  .panel-interactive {
+    @apply panel transition-all duration-200 hover:border-base-600 hover:-translate-y-0.5 hover:shadow-elevated;
+  }
+  .panel-header {
+    @apply flex items-center justify-between gap-3 px-5 py-4 border-b border-base-700/60;
+  }
+  .surface-raised {
+    @apply bg-base-800 border border-base-700/70 rounded-lg;
+  }
+
+  /* ---- Typography ---- */
+  .stat-label {
+    @apply text-2xs font-semibold uppercase tracking-widest text-slate-500;
+  }
+  .metric-value {
+    @apply text-3xl font-bold tabular-nums tracking-tight text-slate-100;
+  }
+  .metric-unit {
+    @apply text-xs font-medium text-slate-500;
+  }
+  .page-title {
+    @apply text-lg font-bold text-slate-50 tracking-tight;
+  }
+  .page-subtitle {
+    @apply text-xs text-slate-500 mt-0.5;
+  }
+
+  /* ---- Controls ---- */
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-2xs font-semibold uppercase tracking-wide;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg text-sm font-medium transition-all duration-150 active:scale-[0.97] disabled:opacity-50 disabled:pointer-events-none disabled:active:scale-100;
+  }
+  .btn-primary {
+    @apply btn bg-accent-500 text-base-950 hover:bg-accent-400 shadow-[0_0_0_1px_rgba(45,212,191,0.4)];
+  }
+  .btn-secondary {
+    @apply btn bg-base-800 text-slate-300 border border-base-700 hover:border-accent-500/40 hover:text-accent-400 hover:bg-base-750;
+  }
+  .btn-ghost {
+    @apply btn text-slate-400 hover:text-slate-100 hover:bg-base-800;
+  }
+  .btn-icon {
+    @apply btn h-8 w-8 flex-shrink-0 text-slate-400 hover:text-slate-100 hover:bg-base-800 rounded-lg;
+  }
+  .input-select {
+    @apply rounded-lg border border-base-700 bg-base-850 px-3 py-1.5 text-sm text-slate-300 transition-colors hover:border-base-600 focus:outline-none focus:ring-1 focus:ring-accent-500/50;
+  }
+
+  /* ---- Loading shimmer ---- */
+  .skeleton {
+    @apply relative overflow-hidden bg-base-800 rounded-md;
+    background-image: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.08), transparent);
+    background-size: 400px 100%;
+    background-repeat: no-repeat;
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+
+  /* ---- Nav ---- */
+  .nav-item {
+    @apply flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-150 relative;
+  }
+  .nav-item-active {
+    @apply bg-accent-500/10 text-accent-400;
+  }
+  .nav-item-inactive {
+    @apply text-slate-400 hover:text-slate-200 hover:bg-base-800/80;
+  }
+}
+
+@layer utilities {
+  .animate-in {
+    animation: fadeIn 0.35s ease-out both;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
