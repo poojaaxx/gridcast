@@ -46,10 +46,12 @@ class Settings(BaseSettings):
     # not a secret, purely informational (e.g. "development" vs "production").
     environment: str = "development"
 
-    # HMAC secret used to sign session JWTs. MUST be overridden via env in any
-    # real deployment - the default is intentionally obviously insecure so a
-    # forgotten override is impossible to miss.
-    jwt_secret_key: str = "insecure-dev-secret-change-me"
+    # HMAC secret used to sign session JWTs. Required - no insecure fallback
+    # is provided, so a missing value fails application startup loudly
+    # (via pydantic-settings validation) instead of silently signing tokens
+    # with a known, publicly-visible default. Generate with e.g.
+    # `openssl rand -hex 32` and set it in .env; never commit the real value.
+    jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 480  # 8h session; no refresh-token rotation (see README)
 
