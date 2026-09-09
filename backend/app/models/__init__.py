@@ -5,6 +5,8 @@ from app.models.weather_observation import WeatherObservation
 from app.models.model_version import ModelVersion
 from app.models.forecast import Forecast
 from app.models.forecast_score import ForecastScore
+from app.models.user import User
+from app.models.audit_log import AuditLog
 
 __all__ = [
     "Region",
@@ -13,4 +15,6 @@ __all__ = [
     "ModelVersion",
     "Forecast",
     "ForecastScore",
+    "User",
+    "AuditLog",
 ]

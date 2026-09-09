@@ -1,4 +1,4 @@
-.PHONY: setup up down logs migrate seed train forecast score simulate demo test clean
+.PHONY: setup up down logs migrate seed train forecast score simulate demo test clean create-admin
 
 COMPOSE = docker compose
 BACKEND = $(COMPOSE) exec backend
@@ -41,6 +41,9 @@ demo:
 	$(COMPOSE) up -d postgres backend
 	$(BACKEND) alembic upgrade head
 	$(BACKEND) python -m app.tasks.bootstrap_demo
+
+create-admin:
+	$(BACKEND) python -m app.tasks.bootstrap_admin
 
 test:
 	$(BACKEND) pytest -v

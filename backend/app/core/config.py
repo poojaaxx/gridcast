@@ -40,9 +40,48 @@ class Settings(BaseSettings):
     # Drift detection
     drift_mape_degradation_threshold_pct: float = 15.0
 
+    # --- Auth / sessions ---
+    # Deployment environment label surfaced in /health and the Admin Console -
+    # not a secret, purely informational (e.g. "development" vs "production").
+    environment: str = "development"
+
+    # HMAC secret used to sign session JWTs. MUST be overridden via env in any
+    # real deployment - the default is intentionally obviously insecure so a
+    # forgotten override is impossible to miss.
+    jwt_secret_key: str = "insecure-dev-secret-change-me"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 480  # 8h session; no refresh-token rotation (see README)
+
+    session_cookie_name: str = "gridcast_session"
+    # Must be True in any deployment served over HTTPS. Left False by default
+    # so local HTTP development (localhost) isn't broken - browsers refuse to
+    # store `Secure` cookies over plain HTTP.
+    cookie_secure: bool = False
+    # "lax" covers the default same-site local/dev topology (frontend and
+    # backend both on `localhost`, different ports). A production deployment
+    # that splits frontend/backend across different registrable domains needs
+    # "none" (which additionally requires cookie_secure=True).
+    cookie_samesite: str = "lax"
+
+    # First-admin bootstrap (see app.tasks.bootstrap_admin / startup hook).
+    # Left blank by default: no admin is created and bootstrap silently no-ops
+    # until both are supplied via environment/secrets.
+    admin_bootstrap_username: str = ""
+    admin_bootstrap_password: str = ""
+
+    # Login brute-force protection (in-memory, single-process - see README
+    # for why this is intentionally lightweight rather than Redis-backed).
+    login_rate_limit_max_attempts: int = 10
+    login_rate_limit_window_seconds: int = 900
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def data_mode(self) -> str:
+        """"live" when a real electricity provider is configured, else "demo"."""
+        return "live" if self.electricity_provider == "real" else "demo"
 
 
 @lru_cache
