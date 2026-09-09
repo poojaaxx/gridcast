@@ -19,7 +19,12 @@ services:
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: ./dist
-    plan: free
+    # No `plan` field here: Render's schema for `runtime: static` services
+    # (confirmed via https://render.com/schema/render.yaml.json) has no
+    # `plan` property at all - static sites are always free with no compute
+    # plan concept, unlike `web`/`worker`/`pserv` below. Setting `plan: free`
+    # here is what produced Render's "no such plan free for service type
+    # web" validation error.
     envVars:
       # Baked into the build at build time (Vite convention) - must point at
       # the backend service's actual public URL. Predictable from the
