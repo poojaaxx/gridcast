@@ -18,6 +18,7 @@ class AuditAction(str, enum.Enum):
     FORECAST_GENERATE = "FORECAST_GENERATE"
     EVALUATION_SCORE = "EVALUATION_SCORE"
     REGION_CREATE = "REGION_CREATE"
+    PIPELINE_CYCLE = "PIPELINE_CYCLE"
 
 
 class AuditStatus(str, enum.Enum):

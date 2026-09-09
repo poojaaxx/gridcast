@@ -38,6 +38,28 @@ services:
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gridcast-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-gridcast}:${POSTGRES_PASSWORD:-gridcast}@postgres:5432/${POSTGRES_DB:-gridcast}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    volumes:
+      - ./data/models:/app/data/models
+    # Idle in demo mode, runs one ingest->score->forecast cycle per hour in
+    # live mode (see app/worker.py) - the same image/migrations as backend,
+    # just a different entrypoint command, so no separate Dockerfile is needed.
+    command: python -m app.worker
+
   frontend:
     build:
       context: ./frontend
