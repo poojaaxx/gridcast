@@ -8,10 +8,12 @@ import {
   LineChart,
   PanelLeftClose,
   PanelLeftOpen,
+  ShieldCheck,
   X,
   Zap,
 } from "lucide-react";
 import { useUI } from "../hooks/useUI";
+import { useAuth } from "../hooks/useAuth";
 import Tooltip from "./Tooltip";
 
 const NAV_ITEMS = [
@@ -24,6 +26,10 @@ const NAV_ITEMS = [
 
 export default function Sidebar() {
   const { sidebarCollapsed, toggleSidebarCollapsed, mobileNavOpen, setMobileNavOpen } = useUI();
+  const { isAdmin } = useAuth();
+  const navItems = isAdmin
+    ? [...NAV_ITEMS, { to: "/admin", label: "Admin Console", icon: ShieldCheck, end: false }]
+    : NAV_ITEMS;
 
   return (
     <>
@@ -62,7 +68,7 @@ export default function Sidebar() {
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto no-scrollbar">
-          {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
+          {navItems.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}

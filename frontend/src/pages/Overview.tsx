@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { Award, Gauge, TrendingUp, Zap } from "lucide-react";
 import Topbar from "../components/Topbar";
 import MetricCard from "../components/MetricCard";
@@ -8,14 +9,31 @@ import LoadingState from "../components/LoadingState";
 import EmptyState from "../components/EmptyState";
 import DriftStatusPanel from "../components/DriftStatus";
 import { useAsync } from "../hooks/useAsync";
+import { useAuth } from "../hooks/useAuth";
 import { useRegion } from "../hooks/useRegion";
 import { usePageRefresh } from "../hooks/usePageRefresh";
 import { api } from "../services/api";
 import { useDemoBootstrap } from "../state/useDemoBootstrap";
 import { MODEL_LABELS } from "../types";
 
+/** Populating data is an admin-only operation (the backend independently
+ * enforces this on every mutating endpoint) - this just avoids showing an
+ * action to anonymous/analyst visitors that would fail with a 401/403. */
+function DemoDataAction() {
+  return (
+    <p className="text-xs text-slate-500">
+      Ask an administrator to populate this from the{" "}
+      <Link to="/login" className="text-accent-400 hover:underline">
+        Admin Console
+      </Link>
+      .
+    </p>
+  );
+}
+
 export default function Overview() {
   const { region, loading: regionLoading, error: regionError } = useRegion();
+  const { isAdmin } = useAuth();
   const bootstrap = useDemoBootstrap();
 
   const actualQuery = useAsync(async () => {
@@ -72,13 +90,14 @@ export default function Overview() {
         <div className="flex-1 flex items-center justify-center p-8">
           <EmptyState
             title="No regions yet"
-            description="GridCast has no data to show. Generate a demo region with ~200 days of synthetic load & weather history, train all three models, and produce initial forecasts — all in one click."
+            description="GridCast has no data to show. An administrator can generate a demo region with ~200 days of synthetic load & weather history, train all three models, and produce initial forecasts from the Admin Console."
             icon={Zap}
-            actionLabel="Generate Demo Data"
+            actionLabel={isAdmin ? "Generate Demo Data" : undefined}
             actionPendingLabel={bootstrap.step ?? "Working…"}
-            onAction={() => bootstrap.run()}
+            onAction={isAdmin ? () => bootstrap.run() : undefined}
             actionPending={bootstrap.running}
             progress={bootstrap.progress}
+            secondary={!isAdmin ? <DemoDataAction /> : undefined}
           />
         </div>
       </div>
@@ -130,13 +149,14 @@ export default function Overview() {
         {!hasAnyData && !anyLoading ? (
           <EmptyState
             title="No forecasts yet"
-            description="This region has no load history or forecasts. Populate it with synthetic demo data to bring the dashboard to life."
+            description="This region has no load history or forecasts. An administrator can populate it with synthetic demo data from the Admin Console."
             icon={Zap}
-            actionLabel="Generate Demo Data"
+            actionLabel={isAdmin ? "Generate Demo Data" : undefined}
             actionPendingLabel={bootstrap.step ?? "Working…"}
-            onAction={() => bootstrap.run(region.name)}
+            onAction={isAdmin ? () => bootstrap.run(region.name) : undefined}
             actionPending={bootstrap.running}
             progress={bootstrap.progress}
+            secondary={!isAdmin ? <DemoDataAction /> : undefined}
           />
         ) : (
           <>

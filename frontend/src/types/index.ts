@@ -107,6 +107,40 @@ export interface DriftStatus {
   threshold_pct: number;
 }
 
+export type UserRole = "admin" | "analyst";
+
+export interface User {
+  id: number;
+  username: string;
+  role: UserRole;
+  is_active: boolean;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+export interface AuditLogEntry {
+  id: number;
+  username: string;
+  action: string;
+  status: "success" | "failure";
+  detail: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export type DataMode = "live" | "demo";
+
+export interface SystemStatus {
+  backend_status: string;
+  database_status: string;
+  environment: string;
+  data_mode: DataMode;
+  electricity_provider: string;
+  current_admin: string;
+  last_ingestion_at: string | null;
+  last_forecast_generated_at: string | null;
+  last_evaluation_scored_at: string | null;
+}
+
 export const MODEL_LABELS: Record<string, string> = {
   seasonal_naive: "Seasonal Naive",
   linear_regression: "Linear Regression",

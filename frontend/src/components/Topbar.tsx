@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
-import { Menu, RefreshCw } from "lucide-react";
+import { Link } from "react-router-dom";
+import { LogOut, Menu, RefreshCw, ShieldCheck } from "lucide-react";
 import { api } from "../services/api";
 import { useUI } from "../hooks/useUI";
+import { useAuth } from "../hooks/useAuth";
 import { useRelativeTime } from "../hooks/useRelativeTime";
 import RegionSelector from "./RegionSelector";
+import StatusBadge from "./StatusBadge";
 
 interface Props {
   title: string;
@@ -15,7 +18,9 @@ interface Props {
 
 export default function Topbar({ title, subtitle, onRefresh, refreshing, lastUpdated = null }: Props) {
   const { setMobileNavOpen } = useUI();
+  const { user, isAuthenticated, logout } = useAuth();
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [dataMode, setDataMode] = useState<"live" | "demo" | null>(null);
   const updatedLabel = useRelativeTime(lastUpdated);
 
   useEffect(() => {
@@ -23,7 +28,11 @@ export default function Topbar({ title, subtitle, onRefresh, refreshing, lastUpd
     const check = () =>
       api
         .health()
-        .then(() => mounted && setConnected(true))
+        .then((res) => {
+          if (!mounted) return;
+          setConnected(true);
+          setDataMode(res.data_mode);
+        })
         .catch(() => mounted && setConnected(false));
     check();
     const interval = setInterval(check, 30_000);
@@ -40,7 +49,10 @@ export default function Topbar({ title, subtitle, onRefresh, refreshing, lastUpd
           <Menu className="h-5 w-5" />
         </button>
         <div className="min-w-0">
-          <h1 className="page-title truncate">{title}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="page-title truncate">{title}</h1>
+            {dataMode && <StatusBadge status={dataMode === "demo" ? "warning" : "healthy"} label={dataMode === "demo" ? "Demo Data" : "Live Data"} />}
+          </div>
           {subtitle && <p className="page-subtitle truncate">{subtitle}</p>}
         </div>
       </div>
@@ -72,6 +84,26 @@ export default function Topbar({ title, subtitle, onRefresh, refreshing, lastUpd
         )}
 
         <RegionSelector />
+
+        <div className="h-6 w-px bg-base-700 hidden sm:block" />
+
+        {isAuthenticated && user ? (
+          <div className="flex items-center gap-2">
+            <span className="hidden md:inline-flex items-center gap-1.5 text-xs text-slate-400">
+              <ShieldCheck className="h-3.5 w-3.5 text-accent-400" />
+              {user.username}
+            </span>
+            <button onClick={() => logout()} aria-label="Sign out" className="btn-secondary px-3 py-1.5">
+              <LogOut className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Sign out</span>
+            </button>
+          </div>
+        ) : (
+          <Link to="/login" className="btn-secondary px-3 py-1.5">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            <span>Admin Login</span>
+          </Link>
+        )}
       </div>
     </header>
   );

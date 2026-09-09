@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -22,6 +23,7 @@ import MetricCard from "../components/MetricCard";
 import LoadingState from "../components/LoadingState";
 import EmptyState from "../components/EmptyState";
 import { useAsync } from "../hooks/useAsync";
+import { useAuth } from "../hooks/useAuth";
 import { useRegion } from "../hooks/useRegion";
 import { usePageRefresh } from "../hooks/usePageRefresh";
 import { api } from "../services/api";
@@ -41,6 +43,7 @@ type SeriesToggle = "load" | "temperature" | "humidity";
 
 export default function DataExplorer() {
   const { region } = useRegion();
+  const { isAdmin } = useAuth();
   const [rangeDays, setRangeDays] = useState(30);
   const [view, setView] = useState<"chart" | "table">("chart");
   const [visibleSeries, setVisibleSeries] = useState<Set<SeriesToggle>>(new Set(["load", "temperature"]));
@@ -170,13 +173,23 @@ export default function DataExplorer() {
         ) : load.length === 0 ? (
           <EmptyState
             title="No observations in range"
-            description="Generate demo data to populate load and weather history for this region."
+            description="An administrator can populate load and weather history for this region from the Admin Console."
             icon={Database}
-            actionLabel="Generate Demo Data"
+            actionLabel={isAdmin ? "Generate Demo Data" : undefined}
             actionPendingLabel={bootstrap.step ?? "Working…"}
-            onAction={() => bootstrap.run(region.name)}
+            onAction={isAdmin ? () => bootstrap.run(region.name) : undefined}
             actionPending={bootstrap.running}
             progress={bootstrap.progress}
+            secondary={
+              !isAdmin ? (
+                <p className="text-xs text-slate-500">
+                  <Link to="/login" className="text-accent-400 hover:underline">
+                    Sign in as an administrator
+                  </Link>{" "}
+                  to generate data.
+                </p>
+              ) : undefined
+            }
           />
         ) : (
           <>

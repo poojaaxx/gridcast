@@ -1,4 +1,5 @@
 import type {
+  AuditLogEntry,
   DriftStatus,
   Forecast,
   ForecastWithModel,
@@ -8,6 +9,8 @@ import type {
   ModelVersion,
   PerformancePoint,
   Region,
+  SystemStatus,
+  User,
   WeatherObservation,
 } from "../types";
 
@@ -21,9 +24,18 @@ export class ApiError extends Error {
   }
 }
 
+/** Dispatched whenever any request comes back 401, so AuthProvider can clear
+ * stale client-side auth state without every caller needing to check for it
+ * individually (e.g. a session that expired mid-page). */
+const UNAUTHORIZED_EVENT = "gridcast:unauthorized";
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
+    // Required for the httpOnly session cookie to be sent/received - the
+    // frontend and backend run on different ports (different origins), so
+    // this is not optional even though both are "localhost".
+    credentials: "include",
     ...options,
   });
 
@@ -34,6 +46,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       detail = body.detail || detail;
     } catch {
       // ignore body parse failure
+    }
+    if (response.status === 401) {
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
     }
     throw new ApiError(detail, response.status);
   }
@@ -52,7 +67,19 @@ function qs(params: Record<string, string | number | undefined | null>): string 
 }
 
 export const api = {
-  health: () => request<{ status: string; database: string }>("/health"),
+  health: () => request<{ status: string; database: string; data_mode: "live" | "demo" }>("/health"),
+
+  auth: {
+    login: (username: string, password: string) =>
+      request<User>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+    logout: () => request<{ status: string }>("/auth/logout", { method: "POST" }),
+    me: () => request<User>("/auth/me"),
+  },
+
+  admin: {
+    status: () => request<SystemStatus>("/admin/status"),
+    auditLog: (limit = 50) => request<AuditLogEntry[]>(`/admin/audit-log${qs({ limit })}`),
+  },
 
   regions: {
     list: () => request<Region[]>("/regions"),
@@ -108,3 +135,8 @@ export const api = {
       request<DriftStatus>(`/evaluation/drift${qs({ region, model_type })}`),
   },
 };
+
+export function onUnauthorized(handler: () => void): () => void {
+  window.addEventListener(UNAUTHORIZED_EVENT, handler);
+  return () => window.removeEventListener(UNAUTHORIZED_EVENT, handler);
+}
