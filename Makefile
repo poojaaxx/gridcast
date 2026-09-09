@@ -1,4 +1,4 @@
-.PHONY: setup up down logs migrate seed train forecast score simulate demo test clean create-admin
+.PHONY: setup up down logs migrate seed train forecast score simulate demo test clean create-admin backfill-live pipeline-cycle
 
 COMPOSE = docker compose
 BACKEND = $(COMPOSE) exec backend
@@ -44,6 +44,12 @@ demo:
 
 create-admin:
 	$(BACKEND) python -m app.tasks.bootstrap_admin
+
+backfill-live:
+	$(BACKEND) python -m app.tasks.backfill_live
+
+pipeline-cycle:
+	$(BACKEND) python -m app.tasks.hourly_pipeline --region nyiso-live
 
 test:
 	$(BACKEND) pytest -v
