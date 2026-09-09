@@ -27,6 +27,7 @@ import { useAsyncAction } from "../hooks/useAsyncAction";
 import { usePageRefresh } from "../hooks/usePageRefresh";
 import { useToast } from "../hooks/useToast";
 import { useDemoBootstrap } from "../state/useDemoBootstrap";
+import { useEvaluationHistoryRun } from "../state/useEvaluationHistoryRun";
 import { api } from "../services/api";
 import { MODEL_LABELS } from "../types";
 
@@ -47,12 +48,13 @@ export default function Admin() {
   const [regionName, setRegionName] = useState("");
   const [trainModelType, setTrainModelType] = useState("lightgbm");
   const [forecastHorizon, setForecastHorizon] = useState<24 | 48>(24);
-  const [confirmOpen, setConfirmOpen] = useState<"ingest" | "train" | "demo" | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState<"ingest" | "train" | "demo" | "eval-history" | null>(null);
 
   const statusQuery = useAsync(() => api.admin.status(), []);
   const auditQuery = useAsync(() => api.admin.auditLog(50), []);
   const modelsQuery = useAsync(() => api.models.list(), []);
   const bootstrap = useDemoBootstrap();
+  const evalHistory = useEvaluationHistoryRun();
   const isLive = statusQuery.data?.data_mode === "live";
 
   // Default the target region to whichever region matches the server's
@@ -257,6 +259,69 @@ export default function Admin() {
           </div>
         </div>
 
+        {/* --- Evaluation History Backfill (LIVE only) --- */}
+        <div className="panel border border-teal-500/20">
+          <SectionHeader
+            title="Evaluation History Backfill"
+            subtitle="LIVE ONLY — one-time walk-forward backtest that populates real, out-of-sample forecast/evaluation history from already-ingested EIA/Open-Meteo data"
+            actions={<StatusBadge status="healthy" label="Real Data Only" />}
+          />
+          <div className="p-5 flex flex-col gap-4">
+            {!isLive ? (
+              <p className="text-xs text-danger-400">
+                Disabled — this operation only makes sense in LIVE mode, where real historical observations exist to backtest against.
+              </p>
+            ) : (
+              <p className="text-xs text-slate-500">
+                Trains a fresh model per historical day-block on real data strictly before that day (never the deployed
+                artifact, which would leak future data), predicts recursively, and scores against real actuals. Safe to
+                re-run — already-generated forecasts are never duplicated. Runs in the background on the server (this can
+                take a couple of minutes for a full window) — this page polls for progress automatically, including
+                after a refresh.
+              </p>
+            )}
+            <button
+              onClick={() => setConfirmOpen("eval-history")}
+              disabled={!isLive || evalHistory.starting || evalHistory.state?.status === "running"}
+              className="btn-primary py-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {evalHistory.state?.status === "running" ? "Building…" : "Build Evaluation History"}
+            </button>
+
+            {evalHistory.state?.status === "running" && (
+              <p className="text-xs text-slate-500">
+                Started {evalHistory.state.started_at ? new Date(evalHistory.state.started_at).toLocaleTimeString() : ""}
+                {evalHistory.state.started_by ? ` by ${evalHistory.state.started_by}` : ""} — checking progress every few seconds…
+              </p>
+            )}
+            {evalHistory.startError && <p className="text-xs text-danger-400">{evalHistory.startError}</p>}
+            {evalHistory.state?.status === "failed" && (
+              <p className="text-xs text-danger-400">Last run failed: {evalHistory.state.error}</p>
+            )}
+            {evalHistory.state?.status === "completed" && evalHistory.state.report && (
+              <div className="rounded-lg border border-base-700/60 bg-base-800/40 p-4 space-y-2">
+                <p className="text-xs text-slate-300">
+                  Backtest window <span className="font-mono">{evalHistory.state.report.backtest_start}</span> →{" "}
+                  <span className="font-mono">{evalHistory.state.report.backtest_end}</span> ({evalHistory.state.report.backtest_days} days) ·{" "}
+                  {evalHistory.state.report.newly_scored} newly scored this run
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {evalHistory.state.report.performance.map((p) => (
+                    <div key={p.model_type} className="text-xs text-slate-400">
+                      <span className="text-slate-200 font-medium">{MODEL_LABELS[p.model_type] ?? p.model_type}</span>
+                      {" — "}MAPE {p.mape.toFixed(2)}% · MAE {p.mae.toFixed(0)} · RMSE {p.rmse.toFixed(0)} · n={p.forecast_count}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-2xs text-slate-500">
+                  Best model: {evalHistory.state.report.best_model ? (MODEL_LABELS[evalHistory.state.report.best_model] ?? evalHistory.state.report.best_model) : "—"}
+                  {" · "}Drift: {evalHistory.state.report.drift.status}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* --- Demo Controls --- */}
         <div className="panel border border-warn-500/20">
           <SectionHeader
@@ -395,6 +460,18 @@ export default function Admin() {
           } finally {
             setConfirmOpen(null);
           }
+        }}
+        onCancel={() => setConfirmOpen(null)}
+      />
+      <ConfirmDialog
+        open={confirmOpen === "eval-history"}
+        title="Build evaluation history?"
+        description="Runs a one-time walk-forward backtest against real, already-ingested EIA/Open-Meteo history for the live region. This can take a couple of minutes and runs in the background — safe to leave this page and come back. Re-running later is safe too; nothing is duplicated."
+        confirmLabel="Build Evaluation History"
+        busy={evalHistory.starting}
+        onConfirm={async () => {
+          setConfirmOpen(null);
+          await evalHistory.start();
         }}
         onCancel={() => setConfirmOpen(null)}
       />

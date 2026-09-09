@@ -145,6 +145,46 @@ export interface SystemStatus {
   last_pipeline_cycle_status: "success" | "failure" | null;
 }
 
+export type EvaluationHistoryStatus = "idle" | "running" | "completed" | "failed";
+
+export interface EvaluationHistoryPerModelResult {
+  model_type: string;
+  skipped?: boolean;
+  reason?: string;
+  blocks_run?: number;
+  forecasts_inserted?: number;
+  forecasts_skipped_existing?: number;
+  blocks_failed_count?: number;
+}
+
+export interface EvaluationHistoryReport {
+  load_count: number;
+  load_sources: string[];
+  load_earliest: string;
+  load_latest: string;
+  weather_count: number;
+  weather_earliest: string;
+  weather_latest: string;
+  backtest_start: string;
+  backtest_end: string;
+  backtest_days: number;
+  per_model: EvaluationHistoryPerModelResult[];
+  newly_scored: number;
+  performance: ModelPerformance[];
+  best_model: string | null;
+  drift: DriftStatus;
+}
+
+export interface EvaluationHistoryRunStatus {
+  status: EvaluationHistoryStatus;
+  region: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  started_by: string | null;
+  error: string | null;
+  report: EvaluationHistoryReport | null;
+}
+
 export const MODEL_LABELS: Record<string, string> = {
   seasonal_naive: "Seasonal Naive",
   linear_regression: "Linear Regression",

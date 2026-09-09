@@ -29,3 +29,13 @@ class SystemStatus(BaseModel):
     last_evaluation_scored_at: dt.datetime | None
     last_pipeline_cycle_at: dt.datetime | None
     last_pipeline_cycle_status: str | None
+
+
+class EvaluationHistoryRunStatus(BaseModel):
+    status: str  # idle | running | completed | failed
+    region: str | None
+    started_at: dt.datetime | None
+    finished_at: dt.datetime | None
+    started_by: str | None
+    error: str | None
+    report: dict[str, Any] | None

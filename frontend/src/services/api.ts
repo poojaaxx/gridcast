@@ -1,6 +1,7 @@
 import type {
   AuditLogEntry,
   DriftStatus,
+  EvaluationHistoryRunStatus,
   Forecast,
   ForecastWithModel,
   LoadObservation,
@@ -82,6 +83,12 @@ export const api = {
   admin: {
     status: () => request<SystemStatus>("/admin/status"),
     auditLog: (limit = 50) => request<AuditLogEntry[]>(`/admin/audit-log${qs({ limit })}`),
+    evaluationHistory: {
+      // No parameters by design - this always runs the one hard-coded,
+      // server-side-allowlisted operation (see backend admin routes).
+      run: () => request<EvaluationHistoryRunStatus>("/admin/evaluation-history/run", { method: "POST" }),
+      status: () => request<EvaluationHistoryRunStatus>("/admin/evaluation-history/status"),
+    },
   },
 
   regions: {
