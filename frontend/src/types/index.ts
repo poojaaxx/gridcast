@@ -90,6 +90,7 @@ export interface PerformancePoint {
   model_type: string;
   forecast_count: number;
   mae: number;
+  rmse: number;
   mape: number;
   smape: number;
 }

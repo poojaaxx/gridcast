@@ -33,24 +33,14 @@ export default function ModelPerformance() {
   const [excludedModels, setExcludedModels] = useState<Set<string>>(new Set());
 
   const summaryQuery = useAsync(async () => (region ? api.evaluation.summary(region.name) : []), [region?.id]);
-  const comparisonQuery = useAsync(
-    async () => (region ? api.evaluation.modelComparison(region.name) : { models: [], best_model: null }),
-    [region?.id]
-  );
   const trendQuery = useAsync(async () => (region ? api.evaluation.timeseries(region.name, granularity) : []), [region?.id, granularity]);
   const modelsQuery = useAsync(async () => api.models.list(), []);
 
-  const { refresh, refreshing } = usePageRefresh([
-    summaryQuery.refetch,
-    comparisonQuery.refetch,
-    trendQuery.refetch,
-    modelsQuery.refetch,
-  ]);
+  const { refresh, refreshing } = usePageRefresh([summaryQuery.refetch, trendQuery.refetch, modelsQuery.refetch]);
 
   if (!region) return <LoadingState label="Loading region…" />;
 
   const summary = (summaryQuery.data ?? []).filter((s) => !excludedModels.has(s.model_type));
-  const comparison = comparisonQuery.data;
   const trend = (trendQuery.data ?? []).filter((p) => !excludedModels.has(p.model_type));
   const models = modelsQuery.data ?? [];
   const allModelTypes = Array.from(new Set((summaryQuery.data ?? []).map((s) => s.model_type)));
@@ -74,11 +64,15 @@ export default function ModelPerformance() {
     foldRows.push(row);
   }
 
-  const bestSummary = comparison?.best_model ? (summaryQuery.data ?? []).find((s) => s.model_type === comparison.best_model) : null;
+  // "Best Performer" must track whichever metric is currently selected, not
+  // silently stay pinned to the backend's fixed MAPE-based best_model - all
+  // four metrics are "lower is better", so this ranks the same (filtered)
+  // rows the table and charts below already use.
+  const bestByMetric = summary.length ? [...summary].sort((a, b) => a[metric] - b[metric])[0] : null;
   const naiveSummary = (summaryQuery.data ?? []).find((s) => s.model_type === "seasonal_naive");
   const improvementPct =
-    bestSummary && naiveSummary && naiveSummary.model_type !== bestSummary.model_type && naiveSummary.mape > 0
-      ? ((naiveSummary.mape - bestSummary.mape) / naiveSummary.mape) * 100
+    bestByMetric && naiveSummary && naiveSummary.model_type !== bestByMetric.model_type && naiveSummary[metric] > 0
+      ? ((naiveSummary[metric] - bestByMetric[metric]) / naiveSummary[metric]) * 100
       : null;
 
   function toggleModel(modelType: string) {
@@ -101,7 +95,7 @@ export default function ModelPerformance() {
       />
 
       <div className="p-4 md:p-6 space-y-6">
-        {bestSummary && (
+        {bestByMetric && (
           <div className="panel p-5 flex flex-wrap items-center gap-6 bg-gradient-to-br from-base-850 to-base-800/60">
             <div className="flex items-center gap-3">
               <div className="rounded-lg bg-accent-500/10 p-2.5">
@@ -109,13 +103,16 @@ export default function ModelPerformance() {
               </div>
               <div>
                 <p className="stat-label">Best Performer</p>
-                <p className="text-lg font-bold text-slate-100">{MODEL_LABELS[bestSummary.model_type] ?? bestSummary.model_type}</p>
+                <p className="text-lg font-bold text-slate-100">{MODEL_LABELS[bestByMetric.model_type] ?? bestByMetric.model_type}</p>
               </div>
             </div>
             <div className="h-10 w-px bg-base-700 hidden sm:block" />
             <div>
-              <p className="stat-label">MAPE</p>
-              <p className="text-lg font-bold text-accent-400 tabular-nums">{bestSummary.mape.toFixed(2)}%</p>
+              <p className="stat-label">{METRIC_OPTIONS.find((m) => m.value === metric)?.label}</p>
+              <p className="text-lg font-bold text-accent-400 tabular-nums">
+                {bestByMetric[metric].toFixed(2)}
+                {METRIC_UNIT[metric]}
+              </p>
             </div>
             {improvementPct !== null && (
               <>
@@ -129,7 +126,7 @@ export default function ModelPerformance() {
               </>
             )}
             <div className="ml-auto text-xs text-slate-500">
-              Based on {bestSummary.forecast_count.toLocaleString()} scored forecasts
+              Based on {bestByMetric.forecast_count.toLocaleString()} scored forecasts
             </div>
           </div>
         )}
@@ -174,7 +171,7 @@ export default function ModelPerformance() {
           ) : summary.length === 0 ? (
             <EmptyState title="No scored forecasts yet" description="Run `make score` (or POST /evaluation/score) after actuals arrive for existing forecasts." />
           ) : (
-            <ModelComparisonTable models={summary} bestModel={comparison?.best_model ?? null} />
+            <ModelComparisonTable models={summary} metric={metric} />
           )}
         </div>
 

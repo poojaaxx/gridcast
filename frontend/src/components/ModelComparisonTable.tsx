@@ -3,12 +3,18 @@ import { Trophy } from "lucide-react";
 import type { ModelPerformance } from "../types";
 import { MODEL_COLORS, MODEL_LABELS } from "../types";
 
+type Metric = "mape" | "mae" | "rmse" | "smape";
+
 interface Props {
   models: ModelPerformance[];
-  bestModel: string | null;
+  /** Ranking metric - lower is better for all four. Defaults to MAPE (the
+   * headline metric) but the table always ranks/highlights by whichever
+   * metric is passed, so it can never visually disagree with a page's own
+   * metric selector. */
+  metric?: Metric;
 }
 
-const COLUMNS: { key: keyof ModelPerformance; label: string; suffix?: string }[] = [
+const COLUMNS: { key: Metric | "forecast_count"; label: string; suffix?: string }[] = [
   { key: "mae", label: "MAE", suffix: "MW" },
   { key: "rmse", label: "RMSE", suffix: "MW" },
   { key: "mape", label: "MAPE", suffix: "%" },
@@ -16,8 +22,9 @@ const COLUMNS: { key: keyof ModelPerformance; label: string; suffix?: string }[]
   { key: "forecast_count", label: "Forecasts" },
 ];
 
-export default function ModelComparisonTable({ models, bestModel }: Props) {
-  const sorted = [...models].sort((a, b) => a.mape - b.mape);
+export default function ModelComparisonTable({ models, metric = "mape" }: Props) {
+  const sorted = [...models].sort((a, b) => a[metric] - b[metric]);
+  const bestModel = sorted[0]?.model_type ?? null;
 
   return (
     <div className="overflow-x-auto">
@@ -27,7 +34,13 @@ export default function ModelComparisonTable({ models, bestModel }: Props) {
             <th className="px-4 py-3 font-medium text-slate-500 text-2xs uppercase tracking-wider w-10">Rank</th>
             <th className="px-4 py-3 font-medium text-slate-500 text-2xs uppercase tracking-wider">Model</th>
             {COLUMNS.map((col) => (
-              <th key={col.key} className="px-4 py-3 font-medium text-slate-500 text-2xs uppercase tracking-wider text-right">
+              <th
+                key={col.key}
+                className={clsx(
+                  "px-4 py-3 font-medium text-2xs uppercase tracking-wider text-right",
+                  col.key === metric ? "text-accent-400" : "text-slate-500"
+                )}
+              >
                 {col.label}
               </th>
             ))}
@@ -60,11 +73,14 @@ export default function ModelComparisonTable({ models, bestModel }: Props) {
                   </div>
                 </td>
                 {COLUMNS.map((col) => (
-                  <td key={col.key} className="px-4 py-3 text-right tabular-nums text-slate-300">
+                  <td
+                    key={col.key}
+                    className={clsx("px-4 py-3 text-right tabular-nums", col.key === metric ? "text-slate-100 font-medium" : "text-slate-300")}
+                  >
                     {typeof model[col.key] === "number"
                       ? (model[col.key] as number).toLocaleString(undefined, { maximumFractionDigits: 2 })
                       : model[col.key]}
-                    {col.suffix && <span className="text-slate-500 ml-1">{col.suffix}</span>}
+                    {col.suffix && <span className="text-slate-500 ml-1 font-normal">{col.suffix}</span>}
                   </td>
                 ))}
               </tr>
