@@ -559,7 +559,7 @@ Frontend (Render Static Site, free, CDN + HTTPS)
 Backend (Render Web Service, free — FastAPI, existing Dockerfile)
         │                                    │
         ▼                                    ▼
-Neon Postgres (free, persistent)   Worker (Render Background Worker, free —
+Neon Postgres (free, persistent)   Worker (Render Background Worker, PAID —
                                     same image, `python -m app.worker`)
 ```
 
@@ -567,16 +567,18 @@ Neon Postgres (free, persistent)   Worker (Render Background Worker, free —
 |---|---|---|
 | Frontend | Render Static Site | Free, no spin-down, global CDN + HTTPS included - a pure static Vite build needs nothing more. |
 | Backend | Render Web Service (Docker, free) | Reuses the existing `backend/Dockerfile` unmodified in spirit (only the port-binding line changed - see below). |
-| Worker | Render Background Worker (Docker, free) | Same image as the backend, different start command (`python -m app.worker`) - the continuous hourly pipeline. |
+| Worker | Render Background Worker (Docker, **paid - see below**) | Same image as the backend, different start command (`python -m app.worker`) - the continuous hourly pipeline. |
 | Database | [Neon](https://neon.tech) Postgres (free) | Chosen over Render's own free Postgres specifically because Render's free Postgres **auto-deletes after 30 days + a 14-day grace period** - unacceptable for data this project is supposed to actually accumulate. Neon's free tier never expires (compute auto-suspends when idle and auto-resumes transparently on the next query; the data itself is never deleted). |
 
-This decision - and the free-tier limitation below - came from checking each platform's currently published terms (Render, Railway, Fly.io, Neon, Supabase), not from assumption; see commit history for the specifics.
+This decision - and the limitation below - came from checking each platform's currently published terms (Render, Railway, Fly.io, Neon, Supabase), not from assumption; see commit history for the specifics.
 
-### Known limitation: the free-tier worker is not guaranteed 24/7
+### Known limitation: Render has no free tier for Background Workers at all
 
-Render's free tier gives each workspace a shared pool of **750 instance-hours/month across every free service in it**. A background worker that never sleeps consumes roughly 730-744 of those hours by itself in a 31-day month, leaving very little headroom for the backend web service sharing the same pool. Render's own community documentation confirms that once a workspace's free instance-hours are exhausted, **all of that workspace's free services are suspended until the hour count resets at the start of the next calendar month** - there's no automatic fallback to billing.
+Confirmed directly from Render's own documentation (`render.com/docs/free`): *"Select Static Site, Web Service, Postgres, or Key Value. Other service types don't support Free instances."* Background Worker is not on that list, on any Blueprint - this isn't a quota you can run out of, it's a plan that Render does not offer for this service type. `render.yaml` still defines `gridcast-worker` with `plan: free` deliberately, so that Render's Blueprint sync visibly rejects it rather than silently defaulting to some other paid tier - the frontend and backend services sync and deploy successfully regardless.
 
-Practically: this deployment may see the worker (or backend) suspended for the last several days of some months, which pauses the hourly pipeline until the reset. This is a disclosed trade-off of using the genuinely-free tier, not a bug - upgrading `gridcast-backend` and `gridcast-worker` to Render's Starter plan (~$7/mo each, ~$14/mo total) removes the shared pool entirely and gives both real 24/7 uptime. That upgrade was not made automatically since it requires payment approval.
+The cheapest plan Render does offer for a Background Worker is **Starter, ~$7/month**. Deploying the worker at all requires changing that one line in `render.yaml` to `plan: starter` (or higher) and accepting that cost - this was **not done automatically and requires your explicit approval**, since it means Render will start billing your account. Until you make that change, `gridcast-worker` will not appear as a Resource and the hourly pipeline will not run in production; the frontend and backend deploy and work independently of this decision.
+
+(An earlier version of this README described a different limitation - a shared 750 free-instance-hour pool that a worker would exhaust - based on the assumption that a free worker plan existed at all. That assumption was wrong; the constraint above supersedes it.)
 
 ### Manual steps (required - I cannot do these for you)
 
@@ -586,10 +588,11 @@ Practically: this deployment may see the worker (or backend) suspended for the l
 4. **Choose a production admin username and a strong, unique password** - you'll type these directly into Render's dashboard, never into a file or this repo.
 5. **Create a Render account** at https://render.com and connect your GitHub account.
 6. In Render, choose **New → Blueprint**, point it at `poojaaxx/gridcast`. Render reads `render.yaml` from the repo root and proposes three services: `gridcast-frontend`, `gridcast-backend`, `gridcast-worker`.
-7. When Render prompts for the environment variables marked secret in `render.yaml` (`DATABASE_URL`, `JWT_SECRET_KEY`, `GRIDCAST_ADMIN_USERNAME`, `GRIDCAST_ADMIN_PASSWORD`, `EIA_API_KEY`), paste in the values from steps 1-4. **`DATABASE_URL`, `JWT_SECRET_KEY`, and `EIA_API_KEY` must be entered identically for both `gridcast-backend` and `gridcast-worker`.**
-8. Click **Deploy**.
-9. Once `gridcast-backend` and `gridcast-frontend` have real URLs, confirm they match the defaults baked into `render.yaml` (`https://gridcast-backend.onrender.com`, `https://gridcast-frontend.onrender.com`). If Render assigned different subdomains (e.g. those exact names were already taken), update `CORS_ORIGINS` on the backend service and `VITE_API_BASE_URL` on the frontend service in the Render dashboard to the real URLs, then trigger a manual redeploy of the frontend (its API URL is baked in at build time, so a plain env var change alone won't take effect).
-10. Once the backend is live and healthy, open its **Shell** tab in the Render dashboard and run a one-time bootstrap:
+7. **Before deploying, decide about `gridcast-worker`**: as committed, `render.yaml` sets `plan: free` on it, which Render will reject at sync time (Background Workers have no free tier at all - see the limitation below). To actually run the hourly pipeline, edit `render.yaml` (or the service's settings after creation) to `plan: starter` or higher (~$7/mo) before or during sync. If you'd rather not pay yet, you can sync anyway - `gridcast-frontend` and `gridcast-backend` will still deploy successfully; only `gridcast-worker` will fail to sync until you make this change.
+8. When Render prompts for the environment variables marked secret in `render.yaml` (`DATABASE_URL`, `JWT_SECRET_KEY`, `GRIDCAST_ADMIN_USERNAME`, `GRIDCAST_ADMIN_PASSWORD`, `EIA_API_KEY`), paste in the values from steps 1-4. **`DATABASE_URL`, `JWT_SECRET_KEY`, and `EIA_API_KEY` must be entered identically for both `gridcast-backend` and `gridcast-worker`.**
+9. Click **Deploy**.
+10. Once `gridcast-backend` and `gridcast-frontend` have real URLs, confirm they match the defaults baked into `render.yaml` (`https://gridcast-backend.onrender.com`, `https://gridcast-frontend.onrender.com`). If Render assigned different subdomains (e.g. those exact names were already taken), update `CORS_ORIGINS` on the backend service and `VITE_API_BASE_URL` on the frontend service in the Render dashboard to the real URLs, then trigger a manual redeploy of the frontend (its API URL is baked in at build time, so a plain env var change alone won't take effect).
+11. Once the backend is live and healthy, open its **Shell** tab in the Render dashboard and run a one-time bootstrap:
     ```bash
     python -m app.tasks.backfill_live      # ~90 days of real NYISO history by default
     python -m app.tasks.train_all --region nyiso-live
@@ -626,7 +629,7 @@ Production is configured for `ELECTRICITY_PROVIDER=real` - **live NYISO demand d
 
 ### Limitations of this deployment
 
-- **Free-tier worker uptime is not guaranteed** - see above. Watch the Admin Console's "last pipeline cycle" timestamp; if it goes stale for more than a couple of hours, the workspace has likely hit its monthly free-hour cap.
+- **The worker cannot run on Render's free tier at all** - see above. Its `render.yaml` plan is left as the (rejected) `free` value until you choose to pay for Starter (~$7/mo) or higher; until then the hourly pipeline does not run in production, though the frontend and backend deploy and work independently of it.
 - **Backend cold starts**: the free web service spins down after 15 minutes without HTTP traffic; the first request afterward takes roughly 30-50 seconds.
 - **Cross-site session cookies**: `SameSite=None; Secure` is honored by all current major browsers, but browsers' third-party-cookie policies keep evolving. Moving the frontend and backend under one real registrable domain (e.g. `app.example.com` + `api.example.com` via a custom domain - not required initially, see Render's custom domain docs) would make the cookie same-site again and remove this category of risk entirely.
 - No load balancing or multi-region failover; the static frontend gets a CDN via Render, the API does not.

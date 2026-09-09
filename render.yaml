@@ -90,6 +90,16 @@ services:
     rootDir: backend
     dockerfilePath: ./Dockerfile
     dockerCommand: sh -c "alembic upgrade head && python -m app.worker"
+    # NOT actually free: confirmed via Render's own docs (render.com/docs/free
+    # - "Select Static Site, Web Service, Postgres, or Key Value. Other
+    # service types don't support Free instances") that Background Worker
+    # has no free instance type on Render, on any Blueprint. This line is
+    # left as `free` deliberately - Render will reject the sync for this
+    # service until it is changed to a paid plan (minimum `starter`,
+    # ~$7/month) - rather than silently defaulting to some other paid tier
+    # or being switched to a paid plan automatically without approval. See
+    # README "Production Deployment" for the cost/approval decision this
+    # blocks on.
     plan: free
     envVars:
       - key: ENVIRONMENT
