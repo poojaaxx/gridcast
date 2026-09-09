@@ -62,6 +62,7 @@ flowchart TB
         MONITOR["Drift Detection\n(recent vs baseline MAPE)"]
     end
 
+    WORKER["Continuous Worker\n(hourly cycle, LIVE mode only)"]
     API["FastAPI REST API"]
     UI["React Dashboard"]
 
@@ -72,12 +73,16 @@ flowchart TB
     DB --> FORECAST --> DB
     DB --> SCORE --> DB
     SCORE --> MONITOR
+    WORKER --> PIPE
+    WORKER --> FORECAST
+    WORKER --> SCORE
     DB --> API --> UI
 ```
 
 ## Features
 
-- **Provider-abstracted ingestion** — real electricity/weather APIs with automatic, deterministic synthetic fallback so the platform is always demoable.
+- **Provider-abstracted ingestion** — real electricity (EIA) + weather (Open-Meteo) APIs in LIVE mode; a deterministic synthetic generator in DEMO mode so the platform is always demoable with zero credentials. LIVE mode never silently falls back to synthetic data on failure - see [Data Sources](#data-sources).
+- **Continuous hourly pipeline** — a dedicated worker container runs ingest → score → forecast every hour in LIVE mode - see [Continuous Pipeline](#continuous-pipeline).
 - **Idempotent upserts** — re-running ingestion never duplicates a row (`UNIQUE(region_id, timestamp)` + conflict-safe inserts).
 - **Leakage-safe feature engineering** — lag and rolling features are shifted before aggregation.
 - **Three versioned forecasting models** — Seasonal Naive, Linear Regression, LightGBM.
@@ -115,7 +120,7 @@ Weather Provider ──────┘
 
 ```
 ElectricityDataProvider
-├── RealElectricityProvider     (EIA-compatible HTTP API, requires EIA_API_KEY)
+├── RealElectricityProvider     (EIA hourly demand API, requires EIA_API_KEY - see "Data Sources")
 └── SyntheticElectricityProvider (deterministic, physically-plausible generator)
 
 WeatherDataProvider
@@ -123,7 +128,11 @@ WeatherDataProvider
 └── SyntheticWeatherProvider     (deterministic fallback)
 ```
 
-If the real electricity provider is unconfigured or a request fails for any reason, `app/ingestion/pipeline.py` transparently falls back to the synthetic provider and logs the fallback. **The demo defaults to synthetic mode** (`ELECTRICITY_PROVIDER=synthetic` in `.env.example`) so the whole platform works without any credentials.
+**DEMO mode** (`ELECTRICITY_PROVIDER=synthetic`, the default) always uses the synthetic generator for load, so the whole platform works with zero credentials. Weather still prefers the real Open-Meteo provider even in demo mode (falling back to synthetic weather only if Open-Meteo itself fails), since real weather makes even synthetic load more realistic.
+
+**LIVE mode** (`ELECTRICITY_PROVIDER=real`) is different by design: if the real electricity provider fails or returns nothing, ingestion **fails loudly** (`LiveProviderError` → HTTP 502) rather than silently substituting synthetic data under a "live" label. If real weather fails in LIVE mode, the run is marked `degraded` (zero weather rows, `weather_source: "unavailable"`) rather than fabricating a replacement. See [Live Mode](#live-mode) below.
+
+Every fetched batch also passes through a validation gate (`app/ingestion/pipeline.py::validate_load_records` / `validate_weather_records`) before being written: missing timestamps, non-finite or negative load values, and duplicate timestamps within the same batch are rejected and counted (never invented or silently repaired) - the ingestion result reports rejection counts alongside insert/skip counts.
 
 The synthetic generator (`app/ingestion/synthetic_provider.py`) is not random noise — it composes:
 
@@ -140,6 +149,52 @@ load(t) = base_load
 seeded deterministically so the same date range always reproduces the same series.
 
 Every ingestion run upserts via `INSERT ... ON CONFLICT DO NOTHING` against the `(region_id, timestamp)` unique constraint — re-running ingestion is always safe.
+
+## Data Sources
+
+### Electricity load — U.S. Energy Information Administration (EIA)
+
+**Why not an Indian source.** Given GridCast's original brief, an Indian electricity-demand API (prioritizing Tamil Nadu / SRLDC, then another Indian state, then a national Indian source) was researched first. The two real candidates found were:
+
+- **SRLDC / Grid-India** (`srldc.in`) — reachable, but real-time state demand is rendered into an HTML dashboard page, not exposed as a documented JSON/REST API. Scraping it would be fragile and its terms for automated, scheduled polling are unclear.
+- **data.gov.in** (India's official open-data platform) — the underlying API gateway (`api.data.gov.in`) is genuinely live, but the dataset catalog is a JavaScript-rendered single-page app that couldn't be browsed from this project's tooling, and the catalog was showing a maintenance banner at research time. Even where CEA power-supply datasets do exist there, they have historically been daily supply-position summaries (demand met / shortage), not the hourly time series GridCast's models need.
+
+Rather than scrape an uncertain source or fabricate one, EIA was selected as the documented fallback — a genuinely live, verified, hourly, deeply historical, credentialed-by-simple-API-key source, clearly labeled throughout the app as **U.S. grid data, not Indian**. A real Indian provider can be dropped in later as an additional `ElectricityDataProvider` (see [Future Improvements](#future-improvements)) without touching the rest of the pipeline.
+
+| | |
+|---|---|
+| **Provider name** | `eia` (`app/ingestion/electricity_provider.py::RealElectricityProvider`) |
+| **Official source** | [EIA Hourly Electric Grid Monitor](https://www.eia.gov/electricity/gridmonitor/) — API: `https://api.eia.gov/v2/electricity/rto/region-data` (Form EIA-930) |
+| **What it provides** | Actual hourly electricity **demand** (`type=D` — filtered explicitly; the same endpoint also serves day-ahead demand *forecasts* and generation/interchange, which would corrupt a load series if left unfiltered) |
+| **Region** | New York ISO (`respondent=NYIS`, configurable via `EIA_RESPONDENT_CODE`) — chosen because its coordinates coincide with GridCast's pre-existing default region geography |
+| **Timestamp resolution** | Hourly, confirmed UTC-labeled by the endpoint's own metadata (`"alias": "hourly (UTC)"`) — no timezone guesswork |
+| **Historical availability** | Back to 2019-01-01 (verified via the endpoint's metadata `startPeriod`) — over 67,000 hourly rows for this one respondent/type at last check |
+| **Update frequency** | Hourly ("hourly live/ongoing data" — not sub-hourly, not "real-time" in the streaming sense) |
+| **Required credentials** | Free API key: register at https://www.eia.gov/opendata/register.php, set `EIA_API_KEY` in `.env`. The shared `DEMO_KEY` also works for light, rate-limited testing (this is how the real end-to-end verification for this feature was performed) but is not meant for sustained production use. |
+| **Limitations** | U.S. data only; a handful of very recent hours occasionally publish as `null` and are correctly rejected by validation rather than guessed at; EIA enforces a per-key rate limit (observed ~10 requests/minute), which the backfill task paces around. |
+
+### Weather — Open-Meteo
+
+Unchanged from the original design: `OpenMeteoWeatherProvider` (`app/ingestion/weather_provider.py`), no API key required, used in both LIVE and DEMO mode. The weather location always matches the electricity region's coordinates - for the live NYISO region that's New York City (40.7128, -74.0060); if `LIVE_REGION_LATITUDE`/`LIVE_REGION_LONGITUDE` are changed to track a different electricity region, weather automatically follows.
+
+## Live Mode
+
+1. Get a free EIA API key (or use `DEMO_KEY` for testing) and set in `.env`:
+   ```bash
+   ELECTRICITY_PROVIDER=real
+   EIA_API_KEY=<your key>
+   EIA_RESPONDENT_CODE=NYIS        # optional, this is the default
+   ```
+2. Restart the backend (`docker compose up -d --build backend`) — `data_mode` immediately reports `"live"` in `/health` and the Admin Console.
+3. Backfill history (needed before training - models require ~60 days of joined load+weather history):
+   ```bash
+   make backfill-live   # python -m app.tasks.backfill_live
+   ```
+   Resumable, idempotent, and rate-limit-paced - safe to re-run or extend via `GRIDCAST_BACKFILL_START` / `GRIDCAST_BACKFILL_END` (ISO dates in `.env`), or `--start`/`--end`/`--chunk-days`/`--pace-seconds` CLI flags. Defaults to the trailing 90 days if no bounds are given (never a hardcoded date).
+4. Train models and generate forecasts from the Admin Console (or `make train` / `make forecast`, pointed at the live region name).
+5. Start the continuous pipeline (see below) so ingestion, scoring, and forecasting keep running hourly without manual intervention.
+
+**The hard guarantee**: LIVE mode never silently substitutes synthetic data. A failing EIA request surfaces as a failed ingestion (502 from the API, a FAILURE audit log entry, a failed worker cycle) - never a quiet fallback that could be mistaken for real data. This is enforced in code (`app/ingestion/pipeline.py::fetch_load`) and covered by tests (`tests/test_live_provider.py`).
 
 ## Forecasting Models
 
@@ -214,6 +269,44 @@ A forecast is never overwritten and never scored twice (`UNIQUE(forecast_id)` on
 
 If `change_percent` exceeds `DRIFT_MAPE_DEGRADATION_THRESHOLD_PCT` (default 15%), status flips to `"degraded"`.
 
+## Continuous Pipeline
+
+```
+INGEST → SCORE → FORECAST → PERSIST → MONITOR
+```
+
+`app/worker.py` is a dedicated container (`docker-compose.yml` service `worker`, same image as `backend`) that runs one full cycle every hour via `app/tasks/hourly_pipeline.py::run_cycle`:
+
+```mermaid
+flowchart LR
+    A[Fetch latest actuals\n+ weather] --> B[Upsert\nidempotent]
+    B --> C[Score forecasts whose\nactuals just arrived]
+    C --> D[Generate fresh\n24h + 48h forecasts]
+    D --> E[Persist with\nmodel_version]
+    E --> F[Record one PIPELINE_CYCLE\naudit entry]
+    F --> G[Admin Console shows\nlast cycle time + status]
+```
+
+Deliberately **not** Celery/Redis/Kafka - a plain sleep-until-the-next-hour loop in its own container is simpler to operate for "one thing, once an hour" and has no extra moving parts. Every step it calls (ingestion upsert, forecast unique constraint, scoring anti-join) is already idempotent, so the worker is safe to restart at any point - a restart mid-cycle just safely re-runs (and no-ops the already-completed parts of) the current hour.
+
+The worker only runs cycles in **LIVE mode**. In DEMO mode it stays intentionally idle (checking every 5 minutes whether that's changed) - demo data progression is already driven explicitly via the Admin Console / `make simulate`, and having a background process silently keep advancing the demo region forever was never part of that design.
+
+Failure handling per step, without corrupting existing state:
+
+- **Electricity provider fails** → the cycle fails, is logged as a `PIPELINE_CYCLE` `failure` audit entry, and retries next hour. Previously ingested data is untouched.
+- **Weather provider fails** → that run is marked degraded (no fabricated weather); load ingestion still proceeds.
+- **Model training fails** (not part of the hourly cycle, but the same principle applies from the Admin Console) → the previous working model version is untouched; the new attempt is simply not saved.
+- **Forecast generation fails for one model** → logged as a per-model error in the cycle summary; other models' forecasts for that hour still generate, and previously persisted forecasts are never overwritten.
+- **Scoring fails** → the whole cycle fails rather than partially scoring, so `forecast_scores` can never end up in a half-written state; already-scored forecasts are never re-scored (idempotent by constraint).
+
+Check pipeline health any time via `GET /admin/status` (`last_pipeline_cycle_at`, `last_pipeline_cycle_status`) or the Admin Console's System Status panel, and inspect individual cycles in **Audit Activity** (`action: "PIPELINE_CYCLE"`, `username: "system:worker"`).
+
+To run a single cycle manually instead of waiting for the worker:
+
+```bash
+make pipeline-cycle   # python -m app.tasks.hourly_pipeline --region nyiso-live
+```
+
 ---
 
 ## Dashboard
@@ -230,7 +323,7 @@ Dark, data-dense analytics UI built with React + Tailwind + Recharts.
 
 > Screenshots: `docs/screenshots/*.png` (add your own after running `make demo`).
 
-The dashboard never fabricates data — every chart reads from the FastAPI backend. When a region has no data yet, public visitors see an explicit empty state pointing them to sign in as an administrator; signed-in admins see a **"Generate Demo Data"** action right there that ingests history, trains all three models, and generates initial forecasts.
+The dashboard never fabricates data — every chart reads from the FastAPI backend. Every route (including the dashboard itself) requires signing in first (`/login` is the application's entry point); an authenticated non-admin sees an explicit empty state pointing them to ask an administrator, while a signed-in admin sees a **"Generate Demo Data"** action right there that ingests history, trains all three models, and generates initial forecasts.
 
 There is also a dedicated **[Admin Console](#security--access-control)** (`/admin`, sign-in required) for running these same operations deliberately, one at a time, with full visibility into what happened.
 
@@ -238,14 +331,14 @@ There is also a dedicated **[Admin Console](#security--access-control)** (`/admi
 
 ## Security & Access Control
 
-GridCast's dashboards are intentionally public and read-only — anyone can open `http://localhost:5173` and watch forecasts, accuracy trends, and drift status with no account. Everything that *writes* — ingesting data, training a model, generating a forecast, scoring evaluations — requires an authenticated **admin** session, enforced independently by the backend on every request (not just hidden in the React UI).
+Signing in is required to use GridCast at all — `/login` is the application's entry point, and every other route redirects there if unauthenticated. Every read-only **API** endpoint (`GET /data/*`, `/forecasts/*`, `/evaluation/*`, `/models`, `/regions`) remains unauthenticated by design (so the backend itself can still be queried directly without a browser session), but the frontend never exposes them without a login. Everything that *writes* — ingesting data, training a model, generating a forecast, scoring evaluations — requires an authenticated **admin** session, enforced independently by the backend on every request (not just hidden in the React UI).
 
 ```mermaid
 flowchart TD
     U[User] --> L[POST /auth/login]
     L --> S["Authenticated Session\n(HttpOnly JWT cookie)"]
     S --> R{Role Check\non every request}
-    R -->|analyst / anonymous| V["Read-only Dashboard\n(GET endpoints - always public)"]
+    R -->|analyst| V["Read-only Dashboard"]
     R -->|admin| A[Admin Console]
     A --> O["Ingest / Train / Forecast / Score\n(POST endpoints - admin only)"]
     O --> AU[(Audit Log)]
@@ -255,9 +348,10 @@ flowchart TD
 
 | Role | Can do |
 |---|---|
-| *(anonymous — no login)* | View every dashboard page and read-only API endpoint (`GET /data/*`, `/forecasts/*`, `/evaluation/*`, `/models`, `/regions`) |
-| `analyst` | Same as anonymous today, plus a valid session (`GET /auth/me`). A real, separate role from `admin` in the schema so the boundary is provably enforced (see `tests/test_auth.py::test_protected_admin_endpoint_with_analyst_returns_403`) — future features that need "logged in but not admin" slot in without a schema change. |
+| `analyst` | Sign in and view every dashboard page. A real, separate role from `admin` in the schema so the boundary is provably enforced (see `tests/test_auth.py::test_protected_admin_endpoint_with_analyst_returns_403`) — no analyst accounts exist by default (only the bootstrapped admin), and there is no self-service registration; an admin would need to create one directly. |
 | `admin` | Everything above, plus every mutating endpoint (`POST /data/ingest`, `/models/train`, `/forecasts/generate`, `/evaluation/score`, `/regions`) and the Admin Console (`/admin`). |
+
+The underlying read-only `GET` API endpoints themselves stay unauthenticated at the HTTP level (matching the platform's original "public data API" design) - it's the frontend routing, not the API, that now requires a login for every page.
 
 ### How sessions work
 
@@ -295,11 +389,11 @@ Failed login attempts are tracked in-memory per `(username, client IP)` and lock
 
 ### Audit log
 
-Every admin action — login, logout, ingest, train, generate, score, region creation — writes an `audit_logs` row: who, what, when, and success/failure (with a small non-secret detail summary, e.g. record counts). It's visible in the Admin Console's **Audit Activity** panel and never stores passwords, tokens, or other secrets. CLI tasks (`make seed`, `make train`, `make demo`, etc.) call the same services directly and bypass the HTTP/auth layer entirely — they are **not** audit-logged, since there's no authenticated request to attribute them to. Treat those as trusted local/operator commands, and the Admin Console as the audited path for anything that matters in a shared deployment.
+Every admin action — login, logout, ingest, train, generate, score, region creation — writes an `audit_logs` row: who, what, when, and success/failure (with a small non-secret detail summary, e.g. record counts). It's visible in the Admin Console's **Audit Activity** panel and never stores passwords, tokens, or other secrets. Manual CLI tasks (`make seed`, `make train`, `make demo`, etc.) call the same services directly and bypass the HTTP/auth layer entirely — they are **not** audit-logged, since there's no authenticated request to attribute them to. The one exception is the continuous worker (see [Continuous Pipeline](#continuous-pipeline)): its hourly cycles run unattended in a live deployment, so each one writes a `PIPELINE_CYCLE` entry attributed to `username: "system:worker"` rather than being silent. Treat plain CLI commands as trusted local/operator actions, and the Admin Console + worker cycles as the audited path for anything that matters in a shared deployment.
 
 ### Live vs. demo data
 
-`GET /health` and the Admin Console's System Status both expose `data_mode`: `"demo"` when `ELECTRICITY_PROVIDER=synthetic` (the default — see [Data Pipeline](#data-pipeline)), or `"live"` when a real provider is configured. The dashboard topbar shows this as a visible **Demo Data / Live Data** badge at all times so synthetic data is never mistaken for a real feed. Switching to live data means configuring `EIA_API_KEY` (or another real electricity provider) and setting `ELECTRICITY_PROVIDER=real` — GridCast will never fabricate a live feed in place of a missing one.
+`GET /health` and the Admin Console's System Status both expose `data_mode`: `"demo"` when `ELECTRICITY_PROVIDER=synthetic` (the default — see [Data Pipeline](#data-pipeline)), or `"live"` when a real provider is configured, plus which provider/region that is. The dashboard topbar shows this as a visible **Demo Data / Live Data** badge at all times (hover for provider/region) so synthetic data is never mistaken for a real feed. See [Live Mode](#live-mode) for the full setup, and [Data Sources](#data-sources) for exactly what "live" means today (EIA, U.S. grid data) and why. The hard rule, enforced in code and tested: **GridCast will never fabricate a live feed in place of a missing one** — a failing live provider is a failed operation, never a silent switch to synthetic data.
 
 ---
 
@@ -369,7 +463,7 @@ Interactive OpenAPI docs: **http://localhost:8000/docs**
 Key endpoints (🔒 = requires an authenticated admin session; everything else is public):
 
 ```
-GET  /health                       includes data_mode: "live" | "demo"
+GET  /health                       data_mode: "live"|"demo", electricity_provider, region
 
 POST /auth/login                   {username, password} - sets HttpOnly session cookie
 POST /auth/logout
@@ -378,7 +472,7 @@ GET  /auth/me                      current session's user, or 401
 GET  /regions                      🔒 POST /regions
 GET  /data/load?region=&start=&end=
 GET  /data/weather?region=&start=&end=
-🔒 POST /data/ingest                  {region, days}
+🔒 POST /data/ingest                  {region, days} - 502 if LIVE mode's provider fails (never a silent fallback)
 GET  /models                       GET /models/{id}
 🔒 POST /models/train                 {region, model_type}
 🔒 POST /forecasts/generate           {region, model_version, horizon_hours}
@@ -390,7 +484,8 @@ GET  /evaluation/timeseries?region=&granularity=day|week
 GET  /evaluation/model-comparison?region=
 GET  /evaluation/drift?region=&model_type=
 
-🔒 GET /admin/status                  environment, data_mode, last ingest/forecast/eval timestamps
+🔒 GET /admin/status                  environment, data_mode, provider, live/demo region,
+                                       last ingest/forecast/eval/pipeline-cycle timestamps
 🔒 GET /admin/audit-log?limit=
 ```
 
@@ -413,10 +508,12 @@ gridcast/
 │   │   │   ├── models/       # seasonal naive, linear, lightgbm
 │   │   │   └── evaluation/   # metrics, walk-forward validation
 │   │   ├── services/         # training, forecasting, evaluation, auth, audit
-│   │   ├── tasks/            # CLI entry points (train_all, bootstrap_admin, ...)
+│   │   ├── tasks/            # CLI entry points (train_all, bootstrap_admin,
+│   │   │                     #   backfill_live, hourly_pipeline, ...)
+│   │   ├── worker.py         # continuous hourly scheduler (docker-compose `worker` service)
 │   │   └── utils/
 │   ├── alembic/               # migrations
-│   └── tests/                 # incl. test_auth.py
+│   └── tests/                 # incl. test_auth.py, test_live_provider.py
 ├── frontend/
 │   └── src/
 │       ├── components/       # MetricCard, ForecastChart, ProtectedRoute, ConfirmDialog, ...
@@ -447,16 +544,17 @@ Database-backed tests (require Postgres — run automatically in the backend con
 - **Ingestion** — re-ingesting identical records inserts zero duplicates; partial-overlap batches insert only the new rows; the DB-level unique constraint rejects duplicate `(region_id, timestamp)` rows.
 - **Evaluation** — a forecast is scored against the correct matching actual; a forecast can never be scored twice, even across repeated scoring runs.
 - **Auth** (`test_auth.py`) — login success/invalid password/unknown user/inactive user; a protected endpoint returns 401 unauthenticated and 403 for a non-admin; an admin can reach it; logout and `/auth/me` behave correctly; admin bootstrap is idempotent; password hashes are never returned in any response; audit log rows are created for login/admin actions and never contain secrets.
+- **Live provider** (`test_live_provider.py`, all EIA HTTP calls mocked - no real network needed to run these) — EIA rows normalize into UTC `LoadRecord`s; malformed/`null`/negative rows are rejected without inventing values; pagination correctly walks beyond a single 5000-row page; a provider HTTP failure raises; **LIVE mode raises `LiveProviderError` instead of falling back to synthetic data**, both on a hard failure and on an empty response; **DEMO mode never even attempts to call the real provider**; the validation gate rejects duplicate/invalid load and weather records; historical backfill is idempotent across repeated runs; the `/data/ingest` route maps a live-provider failure to a clean `502`, not a raw `500`.
 
 ## Future Improvements
 
+- A genuine Indian electricity-demand provider once one can be verified as a stable, machine-readable, ToS-compliant API (see [Data Sources](#data-sources) for what was researched and why EIA was used instead) — drops in as one more `ElectricityDataProvider`, no pipeline changes needed
 - Quantile regression / full probabilistic forecasting (beyond Gaussian residual intervals)
 - SHAP-based explainability for the LightGBM model
 - MLflow experiment tracking in place of the current `model_versions` table
-- Airflow/Prefect scheduling for ingestion, training, and scoring
-- Cloud deployment (ECS/Cloud Run + managed Postgres)
-- Multi-region support with per-region model selection
-- Real grid operator API integration (CAISO, PJM, ERCOT, etc.) as an additional `ElectricityDataProvider`
+- Cloud deployment (ECS/Cloud Run + managed Postgres), including running the `worker` service as a managed scheduled job instead of a long-lived container
+- Multi-region support with per-region model selection (the pipeline already supports multiple regions; only the Admin Console's single "target region" field and the worker's single configured live region are current limitations)
 - Redis-backed login rate limiting for genuinely multi-instance deployments (today's in-memory limiter is single-process by design)
 - Refresh-token rotation for longer-lived sessions without lengthening the access token's blast radius
-- Per-action audit metadata for CLI-triggered operations (`make demo`, `make train`, ...), which currently bypass the HTTP/audit layer entirely
+- Per-action audit metadata for CLI-triggered operations (`make demo`, `make train`, ...), which currently bypass the HTTP/audit layer entirely (the continuous worker is the one exception - see [Continuous Pipeline](#continuous-pipeline))
+- Explicit gap-detection across the historical series (today's ingestion window and hourly worker naturally re-cover recently-missed hours, but a long outage isn't proactively flagged)
