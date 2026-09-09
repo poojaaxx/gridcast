@@ -1,4 +1,4 @@
-.PHONY: setup up down logs migrate seed train forecast score simulate demo test clean create-admin backfill-live pipeline-cycle
+.PHONY: setup up down logs migrate seed train forecast score simulate demo test clean create-admin backfill-live pipeline-cycle bootstrap-evaluation-history
 
 COMPOSE = docker compose
 BACKEND = $(COMPOSE) exec backend
@@ -50,6 +50,9 @@ backfill-live:
 
 pipeline-cycle:
 	$(BACKEND) python -m app.tasks.hourly_pipeline --region nyiso-live
+
+bootstrap-evaluation-history:
+	$(BACKEND) python -m app.tasks.bootstrap_evaluation_history --region nyiso-live
 
 test:
 	$(BACKEND) pytest -v

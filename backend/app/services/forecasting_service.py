@@ -53,6 +53,58 @@ def resolve_model_version(db: Session, model_version: str) -> ModelVersion:
     return version
 
 
+def recursive_predict(
+    model,
+    feature_columns: list[str],
+    working: pd.DataFrame,
+    country: str,
+    forecast_start: dt.datetime,
+    horizon_hours: int,
+    weather_by_ts: dict,
+) -> list[tuple[dt.datetime, float]]:
+    """Shared one-step-at-a-time recursive prediction loop used by both live
+    forecast generation (below) and historical backtesting
+    (``app.services.backtest_service``). ``working`` must already be limited
+    to observations strictly before ``forecast_start`` (sorted ascending,
+    columns [timestamp, load_mw, temperature_c, humidity_percent]).
+    ``weather_by_ts`` maps a UTC timestamp to any object exposing
+    ``.temperature_c``/``.humidity_percent`` (a ``WeatherRecord``, ORM row,
+    or a plain namedtuple all work identically).
+
+    Each predicted value is written back into ``working`` as that hour's
+    ``load_mw`` before computing the next step's lag/rolling features - this
+    is what makes horizons beyond 1 hour possible without needing
+    not-yet-observed future load as an input.
+    """
+    predictions: list[tuple[dt.datetime, float]] = []
+    target_ts = forecast_start
+    for _ in range(horizon_hours):
+        weather = weather_by_ts.get(target_ts)
+        if weather is None:
+            logger.warning("No weather for %s; reusing last known weather values.", target_ts)
+            temperature_c = working["temperature_c"].iloc[-1]
+            humidity_percent = working["humidity_percent"].iloc[-1]
+        else:
+            temperature_c = weather.temperature_c
+            humidity_percent = weather.humidity_percent
+
+        new_row = pd.DataFrame(
+            [{"timestamp": target_ts, "load_mw": np.nan, "temperature_c": temperature_c, "humidity_percent": humidity_percent}]
+        )
+        working = pd.concat([working, new_row], ignore_index=True)
+
+        featured = build_feature_frame(working, country=country)
+        last_row = featured.iloc[[-1]]
+        predicted_value = float(model.predict(last_row[feature_columns])[0])
+
+        working.loc[working.index[-1], "load_mw"] = predicted_value
+        predictions.append((target_ts, predicted_value))
+
+        target_ts = target_ts + dt.timedelta(hours=1)
+
+    return predictions
+
+
 def generate_forecast(
     db: Session,
     region: Region,
@@ -76,34 +128,12 @@ def generate_forecast(
     working = history_df.tail(HISTORY_WINDOW_HOURS).reset_index(drop=True)
     generated_at = floor_to_hour(utcnow())
 
-    predictions: list[tuple[dt.datetime, float, float, float]] = []
-    target_ts = forecast_start
-    for step in range(horizon_hours):
-        weather = weather_by_ts.get(target_ts)
-        if weather is None:
-            logger.warning("No weather for %s; reusing last known weather values.", target_ts)
-            temperature_c = working["temperature_c"].iloc[-1]
-            humidity_percent = working["humidity_percent"].iloc[-1]
-        else:
-            temperature_c = weather.temperature_c
-            humidity_percent = weather.humidity_percent
-
-        new_row = pd.DataFrame(
-            [{"timestamp": target_ts, "load_mw": np.nan, "temperature_c": temperature_c, "humidity_percent": humidity_percent}]
-        )
-        working = pd.concat([working, new_row], ignore_index=True)
-
-        featured = build_feature_frame(working, country=region.country)
-        last_row = featured.iloc[[-1]]
-        predicted_value = float(model.predict(last_row[model.feature_columns])[0])
-
-        working.loc[working.index[-1], "load_mw"] = predicted_value
-
-        lower_bound = predicted_value - 1.96 * residual_std
-        upper_bound = predicted_value + 1.96 * residual_std
-        predictions.append((target_ts, predicted_value, lower_bound, upper_bound))
-
-        target_ts = target_ts + dt.timedelta(hours=1)
+    raw_predictions = recursive_predict(
+        model, model.feature_columns, working, region.country, forecast_start, horizon_hours, weather_by_ts
+    )
+    predictions = [
+        (ts, pred, pred - 1.96 * residual_std, pred + 1.96 * residual_std) for ts, pred in raw_predictions
+    ]
 
     if predictions:
         stmt = pg_insert(Forecast).values(
