@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -65,9 +66,12 @@ class Settings(BaseSettings):
 
     # First-admin bootstrap (see app.tasks.bootstrap_admin / startup hook).
     # Left blank by default: no admin is created and bootstrap silently no-ops
-    # until both are supplied via environment/secrets.
-    admin_bootstrap_username: str = ""
-    admin_bootstrap_password: str = ""
+    # until both are supplied via environment/secrets. Aliased to the
+    # documented GRIDCAST_ADMIN_* names (rather than the pydantic-settings
+    # default of ADMIN_BOOTSTRAP_*) since that's the name used throughout
+    # .env.example, the README, and the CLI task's error message.
+    admin_bootstrap_username: str = Field(default="", validation_alias="GRIDCAST_ADMIN_USERNAME")
+    admin_bootstrap_password: str = Field(default="", validation_alias="GRIDCAST_ADMIN_PASSWORD")
 
     # Login brute-force protection (in-memory, single-process - see README
     # for why this is intentionally lightweight rather than Redis-backed).
