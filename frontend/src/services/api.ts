@@ -67,7 +67,10 @@ function qs(params: Record<string, string | number | undefined | null>): string 
 }
 
 export const api = {
-  health: () => request<{ status: string; database: string; data_mode: "live" | "demo" }>("/health"),
+  health: () =>
+    request<{ status: string; database: string; data_mode: "live" | "demo"; electricity_provider: string; region: string }>(
+      "/health"
+    ),
 
   auth: {
     login: (username: string, password: string) =>

@@ -10,7 +10,7 @@ from app.db.session import get_db
 from app.models.audit_log import AuditAction
 from app.models.user import User
 from app.schemas.admin import AuditLogOut, SystemStatus
-from app.services.audit_service import get_last_success_timestamp, get_recent_audit_logs
+from app.services.audit_service import get_last_entry, get_last_success_timestamp, get_recent_audit_logs
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -23,16 +23,22 @@ def get_system_status(current_user: User = Depends(require_admin), db: Session =
     except Exception as exc:  # noqa: BLE001
         database_status = f"error: {exc}"
 
+    last_cycle = get_last_entry(db, AuditAction.PIPELINE_CYCLE.value)
+
     return SystemStatus(
         backend_status="ok",
         database_status=database_status,
         environment=settings.environment,
         data_mode=settings.data_mode,
         electricity_provider=settings.electricity_provider,
+        live_region=settings.live_region_name,
+        demo_region=settings.demo_region_slug,
         current_admin=current_user.username,
         last_ingestion_at=get_last_success_timestamp(db, AuditAction.DATA_INGEST.value),
         last_forecast_generated_at=get_last_success_timestamp(db, AuditAction.FORECAST_GENERATE.value),
         last_evaluation_scored_at=get_last_success_timestamp(db, AuditAction.EVALUATION_SCORE.value),
+        last_pipeline_cycle_at=last_cycle.created_at if last_cycle else None,
+        last_pipeline_cycle_status=last_cycle.status if last_cycle else None,
     )
 
 

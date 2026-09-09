@@ -22,6 +22,9 @@ def health(db: Session = Depends(get_db)) -> dict:
         "status": "ok",
         "database": db_status,
         # Public, non-sensitive: lets the dashboard clearly label whether it
-        # is showing synthetic demo data or a real configured provider.
+        # is showing synthetic demo data or a real configured provider, and
+        # which provider/region that is - no credentials are included.
         "data_mode": settings.data_mode,
+        "electricity_provider": settings.electricity_provider,
+        "region": settings.live_region_name if settings.data_mode == "live" else settings.demo_region_slug,
     }

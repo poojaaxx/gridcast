@@ -21,7 +21,11 @@ class SystemStatus(BaseModel):
     environment: str
     data_mode: str
     electricity_provider: str
+    live_region: str
+    demo_region: str
     current_admin: str
     last_ingestion_at: dt.datetime | None
     last_forecast_generated_at: dt.datetime | None
     last_evaluation_scored_at: dt.datetime | None
+    last_pipeline_cycle_at: dt.datetime | None
+    last_pipeline_cycle_status: str | None

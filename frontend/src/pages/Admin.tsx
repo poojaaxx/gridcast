@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity,
   CheckCircle2,
@@ -6,6 +6,7 @@ import {
   Cpu,
   Database,
   LineChart,
+  RadioTower,
   Server,
   Sparkles,
   Target,
@@ -43,7 +44,7 @@ function formatTimestamp(value: string | null): string {
 
 export default function Admin() {
   const toast = useToast();
-  const [regionName, setRegionName] = useState("demo-region");
+  const [regionName, setRegionName] = useState("");
   const [trainModelType, setTrainModelType] = useState("lightgbm");
   const [forecastHorizon, setForecastHorizon] = useState<24 | 48>(24);
   const [confirmOpen, setConfirmOpen] = useState<"ingest" | "train" | "demo" | null>(null);
@@ -52,6 +53,14 @@ export default function Admin() {
   const auditQuery = useAsync(() => api.admin.auditLog(50), []);
   const modelsQuery = useAsync(() => api.models.list(), []);
   const bootstrap = useDemoBootstrap();
+  const isLive = statusQuery.data?.data_mode === "live";
+
+  // Default the target region to whichever region matches the server's
+  // actual configured mode, once known - never guess ahead of it.
+  useEffect(() => {
+    if (regionName || !statusQuery.data) return;
+    setRegionName(statusQuery.data.data_mode === "live" ? statusQuery.data.live_region : statusQuery.data.demo_region);
+  }, [statusQuery.data, regionName]);
 
   const { refresh, refreshing } = usePageRefresh([statusQuery.refetch, auditQuery.refetch, modelsQuery.refetch]);
 
@@ -139,10 +148,32 @@ export default function Admin() {
                   <MetricCard label="Environment" value={status.environment} icon={Activity} accent="slate" />
                   <MetricCard label="Signed In As" value={status.current_admin} icon={UserIcon} accent="teal" />
                 </div>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <MetricCard label="Data Mode" value={status.data_mode === "live" ? "Live" : "Demo"} icon={RadioTower} accent={status.data_mode === "live" ? "success" : "amber"} />
+                  <MetricCard label="Provider" value={status.electricity_provider} icon={Sparkles} accent="slate" />
+                  <MetricCard label="Live Region" value={status.live_region} icon={Target} accent="slate" />
+                  <MetricCard label="Demo Region" value={status.demo_region} icon={Target} accent="slate" />
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <MetricCard label="Last Ingestion" value={formatTimestamp(status.last_ingestion_at)} icon={Database} accent="slate" />
                   <MetricCard label="Last Forecast Generated" value={formatTimestamp(status.last_forecast_generated_at)} icon={LineChart} accent="slate" />
                   <MetricCard label="Last Evaluation Scored" value={formatTimestamp(status.last_evaluation_scored_at)} icon={CheckCircle2} accent="slate" />
+                </div>
+                <div className="panel p-4 flex flex-wrap items-center gap-3">
+                  <span className="stat-label flex-shrink-0">Continuous Pipeline (Worker)</span>
+                  {status.last_pipeline_cycle_at ? (
+                    <>
+                      <StatusBadge
+                        status={status.last_pipeline_cycle_status === "success" ? "healthy" : "degraded"}
+                        label={status.last_pipeline_cycle_status === "success" ? "Last cycle OK" : "Last cycle failed"}
+                      />
+                      <span className="text-xs text-slate-500">{formatTimestamp(status.last_pipeline_cycle_at)}</span>
+                    </>
+                  ) : (
+                    <span className="text-xs text-slate-500">
+                      No cycles yet — the worker only runs automatically in LIVE mode (idle in demo mode by design).
+                    </span>
+                  )}
                 </div>
               </div>
             )}
@@ -171,12 +202,14 @@ export default function Admin() {
             <SectionHeader title="Data Operations" subtitle="Ingest load + weather history" />
             <div className="p-5 flex flex-col gap-4">
               <p className="text-xs text-slate-500">
-                Uses the real provider when configured, falling back to the synthetic generator automatically.
+                {isLive
+                  ? "LIVE mode: fetches real hourly demand from the configured EIA provider. If the provider fails, this action fails too — it never substitutes synthetic data."
+                  : "DEMO mode: populates the target region with the deterministic synthetic generator."}
               </p>
               <button onClick={() => setConfirmOpen("ingest")} disabled={ingestAction.running} className="btn-primary py-2.5">
-                {ingestAction.running ? "Ingesting…" : "Run Ingestion (200 days)"}
+                {ingestAction.running ? "Ingesting…" : isLive ? "Run Live Ingestion (200 days)" : "Run Demo Ingestion (200 days)"}
               </button>
-              <ActionResult action={ingestAction} successLabel={(r: any) => `Inserted ${r.load_inserted} load / ${r.weather_inserted} weather records (source: ${r.load_source}).`} />
+              <ActionResult action={ingestAction} successLabel={(r: any) => `Inserted ${r.load_inserted} load / ${r.weather_inserted} weather records (source: ${r.load_source})${r.degraded ? " — weather degraded this run." : "."}`} />
             </div>
           </div>
 
@@ -232,7 +265,18 @@ export default function Admin() {
             actions={<StatusBadge status="warning" label="Synthetic Data" />}
           />
           <div className="p-5 flex flex-col gap-4">
-            <button onClick={() => setConfirmOpen("demo")} disabled={bootstrap.running} className="btn-secondary py-2.5 border-warn-500/30 hover:border-warn-500/50 hover:text-warn-400">
+            {isLive && (
+              <p className="text-xs text-danger-400">
+                Disabled — this deployment is configured for LIVE mode. Demo data generation is blocked here to prevent
+                synthetic records from accidentally being written into a live deployment.
+              </p>
+            )}
+            <button
+              onClick={() => setConfirmOpen("demo")}
+              disabled={bootstrap.running || isLive}
+              title={isLive ? "Disabled while running in LIVE mode" : undefined}
+              className="btn-secondary py-2.5 border-warn-500/30 hover:border-warn-500/50 hover:text-warn-400 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               {bootstrap.running ? bootstrap.step ?? "Working…" : "Generate Demo Data"}
             </button>
             {bootstrap.running && (
@@ -322,8 +366,12 @@ export default function Admin() {
 
       <ConfirmDialog
         open={confirmOpen === "ingest"}
-        title="Run ingestion?"
-        description={`This fetches/generates ~200 days of load and weather history for "${regionName}" and writes it to the database. Safe to re-run — existing timestamps are never duplicated.`}
+        title={isLive ? "Run live ingestion?" : "Run demo ingestion?"}
+        description={
+          isLive
+            ? `This fetches ~200 days of real hourly demand from EIA for "${regionName}" and writes it to the database. Safe to re-run — existing timestamps are never duplicated. If the provider is unreachable, this fails rather than substituting synthetic data.`
+            : `This generates ~200 days of synthetic load and weather history for "${regionName}" and writes it to the database. Safe to re-run — existing timestamps are never duplicated.`
+        }
         confirmLabel="Run Ingestion"
         busy={ingestAction.running}
         onConfirm={async () => {

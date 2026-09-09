@@ -135,10 +135,14 @@ export interface SystemStatus {
   environment: string;
   data_mode: DataMode;
   electricity_provider: string;
+  live_region: string;
+  demo_region: string;
   current_admin: string;
   last_ingestion_at: string | null;
   last_forecast_generated_at: string | null;
   last_evaluation_scored_at: string | null;
+  last_pipeline_cycle_at: string | null;
+  last_pipeline_cycle_status: "success" | "failure" | null;
 }
 
 export const MODEL_LABELS: Record<string, string> = {

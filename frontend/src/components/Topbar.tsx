@@ -21,6 +21,7 @@ export default function Topbar({ title, subtitle, onRefresh, refreshing, lastUpd
   const { user, isAuthenticated, logout } = useAuth();
   const [connected, setConnected] = useState<boolean | null>(null);
   const [dataMode, setDataMode] = useState<"live" | "demo" | null>(null);
+  const [dataSource, setDataSource] = useState<{ provider: string; region: string } | null>(null);
   const updatedLabel = useRelativeTime(lastUpdated);
 
   useEffect(() => {
@@ -32,6 +33,7 @@ export default function Topbar({ title, subtitle, onRefresh, refreshing, lastUpd
           if (!mounted) return;
           setConnected(true);
           setDataMode(res.data_mode);
+          setDataSource({ provider: res.electricity_provider, region: res.region });
         })
         .catch(() => mounted && setConnected(false));
     check();
@@ -51,7 +53,11 @@ export default function Topbar({ title, subtitle, onRefresh, refreshing, lastUpd
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <h1 className="page-title truncate">{title}</h1>
-            {dataMode && <StatusBadge status={dataMode === "demo" ? "warning" : "healthy"} label={dataMode === "demo" ? "Demo Data" : "Live Data"} />}
+            {dataMode && (
+              <span title={dataSource ? `Provider: ${dataSource.provider} · Region: ${dataSource.region}` : undefined}>
+                <StatusBadge status={dataMode === "demo" ? "warning" : "healthy"} label={dataMode === "demo" ? "Demo Data" : "Live Data"} />
+              </span>
+            )}
           </div>
           {subtitle && <p className="page-subtitle truncate">{subtitle}</p>}
         </div>

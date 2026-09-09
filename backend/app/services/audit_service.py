@@ -50,3 +50,12 @@ def get_last_success_timestamp(db: Session, action: str):
         .limit(1)
     )
     return db.execute(stmt).scalar_one_or_none()
+
+
+def get_last_entry(db: Session, action: str) -> AuditLog | None:
+    """Most recent entry for an action regardless of outcome - used where
+    the Admin Console needs to show "did the last run fail", not just "when
+    did it last succeed" (e.g. pipeline cycle status).
+    """
+    stmt = select(AuditLog).where(AuditLog.action == action).order_by(AuditLog.created_at.desc()).limit(1)
+    return db.execute(stmt).scalar_one_or_none()
