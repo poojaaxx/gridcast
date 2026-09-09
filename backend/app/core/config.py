@@ -20,11 +20,39 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     # Data providers
+    # "synthetic" (default demo mode) or "real" (live mode via EIA - see
+    # README "Data Sources": a genuine Indian hourly electricity-demand API
+    # could not be verified as machine-readable/stable within this project's
+    # research, so EIA was selected as the documented, honestly-labeled
+    # fallback per the project's own escalation rule). data_mode below is
+    # derived from this single flag so LIVE/DEMO can never disagree with the
+    # provider actually in use.
     electricity_provider: str = "synthetic"
     open_meteo_base_url: str = "https://api.open-meteo.com/v1/forecast"
     open_meteo_archive_url: str = "https://archive-api.open-meteo.com/v1/archive"
     eia_api_key: str = ""
     eia_api_base_url: str = "https://api.eia.gov/v2"
+    # EIA "respondent" (balancing authority) code to treat as GridCast's live
+    # region. NYIS = New York ISO - hourly actual demand back to 2019,
+    # verified reachable and correctly time-labeled in UTC (see README).
+    eia_respondent_code: str = "NYIS"
+
+    # Metadata for the auto-created live region (distinct from demo_region_*
+    # above so live and demo data are never accidentally mixed in one region
+    # row). Coordinates are used only for weather lookup (Open-Meteo), not
+    # for selecting the EIA respondent, which is chosen by eia_respondent_code.
+    live_region_name: str = "nyiso-live"
+    live_region_country: str = "US"
+    live_region_timezone: str = "America/New_York"
+    live_region_latitude: float = 40.7128
+    live_region_longitude: float = -74.0060
+
+    # Optional bounds for the historical backfill task
+    # (app.tasks.backfill_live). ISO date/datetime strings; left blank to use
+    # the task's own sane default window at call time instead of a
+    # hardcoded date that would otherwise go stale.
+    gridcast_backfill_start: str = ""
+    gridcast_backfill_end: str = ""
 
     # Demo region defaults
     demo_region_slug: str = "demo-region"
