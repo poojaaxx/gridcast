@@ -1,7 +1,7 @@
 import { ClipboardCheck } from "lucide-react";
 import Topbar from "../components/Topbar";
-import DriftStatusPanel from "../components/DriftStatus";
-import StatusBadge, { type Status } from "../components/StatusBadge";
+import DriftStatusPanel, { getDisplayStatus } from "../components/DriftStatus";
+import StatusBadge from "../components/StatusBadge";
 import AccuracyChart from "../components/AccuracyChart";
 import ChartContainer from "../components/ChartContainer";
 import SectionHeader from "../components/SectionHeader";
@@ -88,7 +88,7 @@ export default function ModelMonitoring() {
                 <div key={modelType} className="p-5 flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-slate-200">{MODEL_LABELS[modelType] ?? modelType}</span>
-                    <StatusBadge status={drift.status as Status} withIcon />
+                    <StatusBadge status={getDisplayStatus(drift)} withIcon />
                   </div>
                   <div className="flex justify-between text-xs text-slate-500">
                     <span>Recent MAPE</span>
