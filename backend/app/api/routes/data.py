@@ -7,12 +7,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import resolve_region
+from app.api.deps import require_admin, resolve_region
 from app.db.session import get_db
 from app.ingestion.pipeline import run_ingestion
+from app.models.audit_log import AuditAction, AuditStatus
 from app.models.load_observation import LoadObservation
+from app.models.user import User
 from app.models.weather_observation import WeatherObservation
 from app.schemas.data import LoadObservationOut, WeatherObservationOut
+from app.services.audit_service import log_action
 from app.utils.time import utcnow
 
 router = APIRouter(prefix="/data", tags=["data"])
@@ -35,16 +38,31 @@ class IngestResponse(BaseModel):
 
 
 @router.post("/ingest", response_model=IngestResponse)
-def post_ingest(payload: IngestRequest) -> IngestResponse:
+def post_ingest(
+    payload: IngestRequest,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> IngestResponse:
     """Populate a region with historical load + weather data. Uses the
     real electricity/weather providers when configured and reachable,
     automatically falling back to the deterministic synthetic generator
-    otherwise - this is what powers the dashboard's "Generate Demo Data"
-    action when the database is empty.
+    otherwise - this is what powers the Admin Console's "Generate Demo Data"
+    and "Run Ingestion" actions. Admin-only: this writes real data.
     """
     end = utcnow()
     start = end - dt.timedelta(days=payload.days)
-    result = run_ingestion(payload.region, start, end)
+    try:
+        result = run_ingestion(payload.region, start, end)
+    except Exception as exc:
+        log_action(
+            db, action=AuditAction.DATA_INGEST.value, status=AuditStatus.FAILURE,
+            user=current_user, detail={"region": payload.region, "days": payload.days, "error": str(exc)},
+        )
+        raise
+    log_action(
+        db, action=AuditAction.DATA_INGEST.value, status=AuditStatus.SUCCESS,
+        user=current_user, detail={k: v for k, v in result.items() if k != "region_id"},
+    )
     return IngestResponse(**result)
 
 

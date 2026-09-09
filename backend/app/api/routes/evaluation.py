@@ -3,8 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import resolve_region
+from app.api.deps import require_admin, resolve_region
 from app.db.session import get_db
+from app.models.audit_log import AuditAction, AuditStatus
+from app.models.user import User
 from app.schemas.evaluation import (
     DriftStatus,
     ModelComparison,
@@ -14,6 +16,7 @@ from app.schemas.evaluation import (
     ScoreResponse,
 )
 from app.services import evaluation_service
+from app.services.audit_service import log_action
 
 router = APIRouter(prefix="/evaluation", tags=["evaluation"])
 
@@ -29,9 +32,17 @@ def _resolve_region_id(db: Session, region_name: str | None) -> int | None:
 
 
 @router.post("/score", response_model=ScoreResponse)
-def post_score(payload: ScoreRequest, db: Session = Depends(get_db)) -> ScoreResponse:
+def post_score(
+    payload: ScoreRequest,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> ScoreResponse:
     region_id = _resolve_region_id(db, payload.region)
     result = evaluation_service.score_forecasts(db, region_id=region_id)
+    log_action(
+        db, action=AuditAction.EVALUATION_SCORE.value, status=AuditStatus.SUCCESS,
+        user=current_user, detail={"region": payload.region, "scored": result["scored"]},
+    )
     return ScoreResponse(**result)
 
 

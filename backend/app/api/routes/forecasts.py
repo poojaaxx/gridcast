@@ -6,18 +6,25 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import resolve_region
+from app.api.deps import require_admin, resolve_region
 from app.db.session import get_db
+from app.models.audit_log import AuditAction, AuditStatus
 from app.models.forecast import Forecast
 from app.models.model_version import ModelVersion
+from app.models.user import User
 from app.schemas.forecast import ForecastWithModelOut, GenerateForecastRequest, ForecastOut
+from app.services.audit_service import log_action
 from app.services.forecasting_service import generate_forecast, resolve_model_version
 
 router = APIRouter(prefix="/forecasts", tags=["forecasts"])
 
 
 @router.post("/generate", response_model=list[ForecastOut])
-def post_generate_forecast(payload: GenerateForecastRequest, db: Session = Depends(get_db)) -> list[ForecastOut]:
+def post_generate_forecast(
+    payload: GenerateForecastRequest,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> list[ForecastOut]:
     region = resolve_region(db, payload.region)
     try:
         model_version = resolve_model_version(db, payload.model_version)
@@ -25,9 +32,21 @@ def post_generate_forecast(payload: GenerateForecastRequest, db: Session = Depen
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     try:
-        return generate_forecast(db, region, model_version, payload.horizon_hours)
+        forecasts = generate_forecast(db, region, model_version, payload.horizon_hours)
     except ValueError as exc:
+        log_action(
+            db, action=AuditAction.FORECAST_GENERATE.value, status=AuditStatus.FAILURE,
+            user=current_user,
+            detail={"region": payload.region, "model_version": payload.model_version, "horizon_hours": payload.horizon_hours, "error": str(exc)},
+        )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    log_action(
+        db, action=AuditAction.FORECAST_GENERATE.value, status=AuditStatus.SUCCESS,
+        user=current_user,
+        detail={"region": payload.region, "model_version": model_version.version, "horizon_hours": payload.horizon_hours, "count": len(forecasts)},
+    )
+    return forecasts
 
 
 @router.get("/latest", response_model=list[ForecastWithModelOut])
