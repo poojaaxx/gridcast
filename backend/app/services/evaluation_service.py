@@ -131,6 +131,7 @@ def get_performance_timeseries(db: Session, region_id: int | None = None, granul
             ModelVersion.model_type,
             func.count(ForecastScore.id).label("forecast_count"),
             func.avg(ForecastScore.absolute_error).label("mae"),
+            func.avg(ForecastScore.squared_error).label("mean_squared_error"),
             func.avg(ForecastScore.absolute_percentage_error).label("mape_fraction"),
             func.avg(_smape_fraction_expr()).label("smape_fraction"),
         )
@@ -148,10 +149,11 @@ def get_performance_timeseries(db: Session, region_id: int | None = None, granul
             "model_type": model_type,
             "forecast_count": count,
             "mae": round(float(mae or 0), 3),
+            "rmse": round(float((mse or 0) ** 0.5), 3),
             "mape": round(float((mape_fraction or 0) * 100), 3),
             "smape": round(float((smape_fraction or 0) * 100), 3),
         }
-        for period_val, model_type, count, mae, mape_fraction, smape_fraction in db.execute(stmt).all()
+        for period_val, model_type, count, mae, mse, mape_fraction, smape_fraction in db.execute(stmt).all()
     ]
 
 

@@ -34,6 +34,7 @@ class PerformancePoint(BaseModel):
     model_type: str
     forecast_count: int
     mae: float
+    rmse: float
     mape: float
     smape: float
 
