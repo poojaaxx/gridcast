@@ -546,6 +546,92 @@ Database-backed tests (require Postgres — run automatically in the backend con
 - **Auth** (`test_auth.py`) — login success/invalid password/unknown user/inactive user; a protected endpoint returns 401 unauthenticated and 403 for a non-admin; an admin can reach it; logout and `/auth/me` behave correctly; admin bootstrap is idempotent; password hashes are never returned in any response; audit log rows are created for login/admin actions and never contain secrets.
 - **Live provider** (`test_live_provider.py`, all EIA HTTP calls mocked - no real network needed to run these) — EIA rows normalize into UTC `LoadRecord`s; malformed/`null`/negative rows are rejected without inventing values; pagination correctly walks beyond a single 5000-row page; a provider HTTP failure raises; **LIVE mode raises `LiveProviderError` instead of falling back to synthetic data**, both on a hard failure and on an empty response; **DEMO mode never even attempts to call the real provider**; the validation gate rejects duplicate/invalid load and weather records; historical backfill is idempotent across repeated runs; the `/data/ingest` route maps a live-provider failure to a clean `502`, not a raw `500`.
 
+## Production Deployment
+
+**Status: deployment preparation complete; external deployment step remains.** Everything that can be prepared from inside this repository - a Render Blueprint, a production-ready Dockerfile, exact manual steps, and this documentation - is done. There is no live public URL yet: creating the hosting/database accounts, entering the EIA API key and admin credentials, and clicking "Deploy" are actions only you can take (an assistant with only local shell/file access cannot sign up for external services on your behalf).
+
+### Architecture
+
+```
+Frontend (Render Static Site, free, CDN + HTTPS)
+        │  HTTPS fetch, credentials: include
+        ▼
+Backend (Render Web Service, free — FastAPI, existing Dockerfile)
+        │                                    │
+        ▼                                    ▼
+Neon Postgres (free, persistent)   Worker (Render Background Worker, free —
+                                    same image, `python -m app.worker`)
+```
+
+| Component | Platform | Why |
+|---|---|---|
+| Frontend | Render Static Site | Free, no spin-down, global CDN + HTTPS included - a pure static Vite build needs nothing more. |
+| Backend | Render Web Service (Docker, free) | Reuses the existing `backend/Dockerfile` unmodified in spirit (only the port-binding line changed - see below). |
+| Worker | Render Background Worker (Docker, free) | Same image as the backend, different start command (`python -m app.worker`) - the continuous hourly pipeline. |
+| Database | [Neon](https://neon.tech) Postgres (free) | Chosen over Render's own free Postgres specifically because Render's free Postgres **auto-deletes after 30 days + a 14-day grace period** - unacceptable for data this project is supposed to actually accumulate. Neon's free tier never expires (compute auto-suspends when idle and auto-resumes transparently on the next query; the data itself is never deleted). |
+
+This decision - and the free-tier limitation below - came from checking each platform's currently published terms (Render, Railway, Fly.io, Neon, Supabase), not from assumption; see commit history for the specifics.
+
+### Known limitation: the free-tier worker is not guaranteed 24/7
+
+Render's free tier gives each workspace a shared pool of **750 instance-hours/month across every free service in it**. A background worker that never sleeps consumes roughly 730-744 of those hours by itself in a 31-day month, leaving very little headroom for the backend web service sharing the same pool. Render's own community documentation confirms that once a workspace's free instance-hours are exhausted, **all of that workspace's free services are suspended until the hour count resets at the start of the next calendar month** - there's no automatic fallback to billing.
+
+Practically: this deployment may see the worker (or backend) suspended for the last several days of some months, which pauses the hourly pipeline until the reset. This is a disclosed trade-off of using the genuinely-free tier, not a bug - upgrading `gridcast-backend` and `gridcast-worker` to Render's Starter plan (~$7/mo each, ~$14/mo total) removes the shared pool entirely and gives both real 24/7 uptime. That upgrade was not made automatically since it requires payment approval.
+
+### Manual steps (required - I cannot do these for you)
+
+1. **Create a free Neon account** at https://neon.tech (no credit card required) and create a project/database (e.g. named `gridcast`). Copy its connection string - it looks like `postgresql://<user>:<password>@<host>.neon.tech/<db>?sslmode=require`.
+2. **Register a free EIA API key** at https://www.eia.gov/opendata/register.php.
+3. **Generate a JWT secret**: run `openssl rand -hex 32` locally and copy the output.
+4. **Choose a production admin username and a strong, unique password** - you'll type these directly into Render's dashboard, never into a file or this repo.
+5. **Create a Render account** at https://render.com and connect your GitHub account.
+6. In Render, choose **New → Blueprint**, point it at `poojaaxx/gridcast`. Render reads `render.yaml` from the repo root and proposes three services: `gridcast-frontend`, `gridcast-backend`, `gridcast-worker`.
+7. When Render prompts for the environment variables marked secret in `render.yaml` (`DATABASE_URL`, `JWT_SECRET_KEY`, `GRIDCAST_ADMIN_USERNAME`, `GRIDCAST_ADMIN_PASSWORD`, `EIA_API_KEY`), paste in the values from steps 1-4. **`DATABASE_URL`, `JWT_SECRET_KEY`, and `EIA_API_KEY` must be entered identically for both `gridcast-backend` and `gridcast-worker`.**
+8. Click **Deploy**.
+9. Once `gridcast-backend` and `gridcast-frontend` have real URLs, confirm they match the defaults baked into `render.yaml` (`https://gridcast-backend.onrender.com`, `https://gridcast-frontend.onrender.com`). If Render assigned different subdomains (e.g. those exact names were already taken), update `CORS_ORIGINS` on the backend service and `VITE_API_BASE_URL` on the frontend service in the Render dashboard to the real URLs, then trigger a manual redeploy of the frontend (its API URL is baked in at build time, so a plain env var change alone won't take effect).
+10. Once the backend is live and healthy, open its **Shell** tab in the Render dashboard and run a one-time bootstrap:
+    ```bash
+    python -m app.tasks.backfill_live      # ~90 days of real NYISO history by default
+    python -m app.tasks.train_all --region nyiso-live
+    ```
+    After this, the worker takes over hourly ingestion, forecasting, and scoring on its own - see [Continuous Pipeline](#continuous-pipeline).
+
+### What was prepared automatically (no account needed)
+
+- **`render.yaml`** - the full three-service Blueprint described above, with every secret marked `sync: false` so Render prompts for it once in its dashboard rather than storing it in this file or Git.
+- **`backend/Dockerfile`** - the only functional change: the container now binds to `$PORT` (falling back to `8000` when unset, so local `docker-compose` is unaffected) instead of a hardcoded port, since Render assigns the port dynamically at runtime. It also now runs `alembic upgrade head` before starting, so migrations apply automatically on every deploy without a separate manual step.
+- **Production CORS/cookie values**, set directly in `render.yaml`: an explicit single-origin CORS allowlist (never `*`), `COOKIE_SECURE=true`, and `COOKIE_SAMESITE=none`. The last one is required specifically because `onrender.com` is on the [Public Suffix List](https://publicsuffix.org/) - `gridcast-frontend.onrender.com` and `gridcast-backend.onrender.com` are treated by browsers as different sites despite sharing a base domain, so `SameSite=Lax` (correct for local dev, where both run on `localhost`) would silently block the session cookie on the frontend's cross-site `fetch()` calls in production.
+- **`ELECTRICITY_PROVIDER=real`** set for both the backend and worker in `render.yaml` - production is configured for LIVE data (EIA/NYISO) from the start, never defaulting to `synthetic`.
+
+### Environment variables reference
+
+| Variable | Where it's used | Notes |
+|---|---|---|
+| `DATABASE_URL` | backend, worker | Neon connection string. Never committed - `sync: false` in `render.yaml`. |
+| `JWT_SECRET_KEY` | backend, worker | `openssl rand -hex 32`. Required - the app refuses to start without it (see [Security & Access Control](#security--access-control)). |
+| `GRIDCAST_ADMIN_USERNAME` / `GRIDCAST_ADMIN_PASSWORD` | backend | Existing idempotent bootstrap mechanism - see [Admin bootstrap](#admin-bootstrap). No new/hardcoded admin was introduced for deployment. |
+| `EIA_API_KEY` | backend, worker | Free key from EIA - see [Data Sources](#data-sources). |
+| `ELECTRICITY_PROVIDER` | backend, worker | Set to `real` in `render.yaml` - this is the project's existing single source of truth for `data_mode` (there is no separate `GRIDCAST_DATA_MODE` flag that could disagree with it). |
+| `EIA_RESPONDENT_CODE` | backend, worker | `NYIS` (New York ISO) - the region name is `LIVE_REGION_NAME` (default `nyiso-live`), not a separate `GRIDCAST_REGION` flag, for the same single-source-of-truth reason. |
+| `CORS_ORIGINS` | backend | The frontend's exact public URL - see the cross-site cookie note above. |
+| `COOKIE_SECURE` / `COOKIE_SAMESITE` | backend | `true` / `none` in production (HTTPS + cross-subdomain), `false` / `lax` for local dev. |
+
+### Security in production
+
+Every existing protection is preserved unmodified, not weakened for deployment convenience: Argon2id password hashing, HttpOnly JWT session cookie (now also `Secure=true`), the required (non-optional) `JWT_SECRET_KEY`, independent backend authorization on every mutating endpoint, the audit log, and the explicit CORS allowlist. See [Security & Access Control](#security--access-control) for the full design - none of it is deployment-specific.
+
+### Live data in production
+
+Production is configured for `ELECTRICITY_PROVIDER=real` - **live NYISO demand data from the U.S. Energy Information Administration**, not synthetic data and not Indian/Tamil Nadu data (see [Data Sources](#data-sources) for why EIA was selected). The Admin Console and dashboard badge both surface this accurately (`data_mode: "live"`, provider `eia`, region `nyiso-live`). If the EIA provider fails in production, the existing no-silent-fallback rule applies exactly as in any other environment: the operation fails, previously ingested data is preserved untouched, and nothing is fabricated in its place.
+
+### Limitations of this deployment
+
+- **Free-tier worker uptime is not guaranteed** - see above. Watch the Admin Console's "last pipeline cycle" timestamp; if it goes stale for more than a couple of hours, the workspace has likely hit its monthly free-hour cap.
+- **Backend cold starts**: the free web service spins down after 15 minutes without HTTP traffic; the first request afterward takes roughly 30-50 seconds.
+- **Cross-site session cookies**: `SameSite=None; Secure` is honored by all current major browsers, but browsers' third-party-cookie policies keep evolving. Moving the frontend and backend under one real registrable domain (e.g. `app.example.com` + `api.example.com` via a custom domain - not required initially, see Render's custom domain docs) would make the cookie same-site again and remove this category of risk entirely.
+- No load balancing or multi-region failover; the static frontend gets a CDN via Render, the API does not.
+- This is U.S. grid data (NYISO), not Indian - documented repeatedly and deliberately, since the original brief prioritized an Indian source that could not be verified as available (see [Data Sources](#data-sources)).
+
 ## Future Improvements
 
 - A genuine Indian electricity-demand provider once one can be verified as a stable, machine-readable, ToS-compliant API (see [Data Sources](#data-sources) for what was researched and why EIA was used instead) — drops in as one more `ElectricityDataProvider`, no pipeline changes needed
