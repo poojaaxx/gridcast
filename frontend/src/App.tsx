@@ -24,26 +24,28 @@ export default function App() {
               <Route
                 path="*"
                 element={
-                  <div className="app-shell flex h-screen w-screen overflow-hidden">
-                    <Sidebar />
-                    <main className="flex-1 overflow-y-auto min-w-0">
-                      <Routes>
-                        <Route path="/" element={<Overview />} />
-                        <Route path="/forecasts" element={<ForecastExplorer />} />
-                        <Route path="/performance" element={<ModelPerformance />} />
-                        <Route path="/data" element={<DataExplorer />} />
-                        <Route path="/monitoring" element={<ModelMonitoring />} />
-                        <Route
-                          path="/admin"
-                          element={
-                            <ProtectedRoute requireAdmin>
-                              <Admin />
-                            </ProtectedRoute>
-                          }
-                        />
-                      </Routes>
-                    </main>
-                  </div>
+                  <ProtectedRoute>
+                    <div className="app-shell flex h-screen w-screen overflow-hidden">
+                      <Sidebar />
+                      <main className="flex-1 overflow-y-auto min-w-0">
+                        <Routes>
+                          <Route path="/" element={<Overview />} />
+                          <Route path="/forecasts" element={<ForecastExplorer />} />
+                          <Route path="/performance" element={<ModelPerformance />} />
+                          <Route path="/data" element={<DataExplorer />} />
+                          <Route path="/monitoring" element={<ModelMonitoring />} />
+                          <Route
+                            path="/admin"
+                            element={
+                              <ProtectedRoute requireAdmin>
+                                <Admin />
+                              </ProtectedRoute>
+                            }
+                          />
+                        </Routes>
+                      </main>
+                    </div>
+                  </ProtectedRoute>
                 }
               />
             </Routes>

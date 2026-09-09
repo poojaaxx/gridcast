@@ -5,7 +5,7 @@ import { useAuth } from "../hooks/useAuth";
 import { ApiError } from "../services/api";
 
 export default function Login() {
-  const { isAuthenticated, isAdmin, loading: authLoading, login } = useAuth();
+  const { isAuthenticated, loading: authLoading, login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -17,7 +17,7 @@ export default function Login() {
 
   if (!authLoading && isAuthenticated) {
     const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname;
-    return <Navigate to={from ?? (isAdmin ? "/admin" : "/")} replace />;
+    return <Navigate to={from ?? "/"} replace />;
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -28,7 +28,7 @@ export default function Login() {
     try {
       await login(username, password);
       const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname;
-      navigate(from ?? "/admin", { replace: true });
+      navigate(from ?? "/", { replace: true });
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setError("Invalid username or password.");
@@ -56,9 +56,9 @@ export default function Login() {
         </div>
 
         <div className="panel p-6 shadow-elevated">
-          <h1 className="text-sm font-semibold text-slate-200 mb-0.5">Admin sign in</h1>
+          <h1 className="text-sm font-semibold text-slate-200 mb-0.5">Sign in</h1>
           <p className="text-xs text-slate-500 mb-6">
-            Operational access for ingestion, training, forecasting, and evaluation.
+            Sign in to access the GridCast dashboard and forecasting tools.
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
@@ -127,7 +127,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-2xs text-slate-600 mt-6">
-          Viewing dashboards doesn't require an account — this sign-in is for administrators only.
+          Access to the Admin Console is limited to operator accounts with admin privileges.
         </p>
       </div>
     </div>

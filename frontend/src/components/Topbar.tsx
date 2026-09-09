@@ -101,7 +101,7 @@ export default function Topbar({ title, subtitle, onRefresh, refreshing, lastUpd
         ) : (
           <Link to="/login" className="btn-secondary px-3 py-1.5">
             <ShieldCheck className="h-3.5 w-3.5" />
-            <span>Admin Login</span>
+            <span>Sign in</span>
           </Link>
         )}
       </div>

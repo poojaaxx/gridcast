@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -182,12 +181,7 @@ export default function DataExplorer() {
             progress={bootstrap.progress}
             secondary={
               !isAdmin ? (
-                <p className="text-xs text-slate-500">
-                  <Link to="/login" className="text-accent-400 hover:underline">
-                    Sign in as an administrator
-                  </Link>{" "}
-                  to generate data.
-                </p>
+                <p className="text-xs text-slate-500">Ask an administrator to generate data from the Admin Console.</p>
               ) : undefined
             }
           />

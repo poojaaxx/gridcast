@@ -1,4 +1,3 @@
-import { Link } from "react-router-dom";
 import { Award, Gauge, TrendingUp, Zap } from "lucide-react";
 import Topbar from "../components/Topbar";
 import MetricCard from "../components/MetricCard";
@@ -20,15 +19,7 @@ import { MODEL_LABELS } from "../types";
  * enforces this on every mutating endpoint) - this just avoids showing an
  * action to anonymous/analyst visitors that would fail with a 401/403. */
 function DemoDataAction() {
-  return (
-    <p className="text-xs text-slate-500">
-      Ask an administrator to populate this from the{" "}
-      <Link to="/login" className="text-accent-400 hover:underline">
-        Admin Console
-      </Link>
-      .
-    </p>
-  );
+  return <p className="text-xs text-slate-500">Ask an administrator to populate this from the Admin Console.</p>;
 }
 
 export default function Overview() {
