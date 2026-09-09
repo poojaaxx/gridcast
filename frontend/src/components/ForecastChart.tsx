@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Area,
   CartesianGrid,
   ComposedChart,
   Legend,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -76,6 +77,21 @@ export default function ForecastChart({ data, height = 340 }: { data: ForecastCh
     bandwidth: d.upper != null && d.lower != null ? d.upper - d.lower : null,
   }));
 
+  // The "NOW" divider marks the real, data-derived boundary between observed
+  // history and forecast - the last timestamp with an actual reading, but
+  // only when the series genuinely continues into forecast territory after
+  // it (otherwise there's nothing to divide).
+  const nowTimestamp = useMemo(() => {
+    let lastActualIndex = -1;
+    for (let i = 0; i < prepared.length; i++) {
+      if (prepared[i].actual != null) lastActualIndex = i;
+    }
+    if (lastActualIndex === -1) return null;
+    const hasForecastFromHere = prepared.slice(lastActualIndex).some((p) => p.predicted != null);
+    return hasForecastFromHere ? prepared[lastActualIndex].timestamp : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
   const legendItems: { key: SeriesKey; label: string; color: string }[] = [
     { key: "actual", label: "Actual", color: "#e2e8f0" },
     { key: "predicted", label: "Forecast", color: "#2dd4bf" },
@@ -111,6 +127,16 @@ export default function ForecastChart({ data, height = 340 }: { data: ForecastCh
             tickFormatter={(v) => `${Math.round(v / 100) / 10}k`}
           />
           <Tooltip content={<CustomTooltip />} />
+
+          {nowTimestamp && (
+            <ReferenceLine
+              x={nowTimestamp}
+              stroke="#64748b"
+              strokeDasharray="4 4"
+              ifOverflow="extendDomain"
+              label={{ value: "NOW", position: "insideTopRight", fill: "#94a3b8", fontSize: 10, fontWeight: 600 }}
+            />
+          )}
 
           {!hidden.has("interval") && (
             <>

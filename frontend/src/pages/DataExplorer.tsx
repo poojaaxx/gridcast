@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -46,6 +46,10 @@ export default function DataExplorer() {
   const [visibleSeries, setVisibleSeries] = useState<Set<SeriesToggle>>(new Set(["load", "temperature"]));
   const [page, setPage] = useState(0);
   const bootstrap = useDemoBootstrap();
+
+  // A new range/region has a different number of pages entirely - always
+  // land back on the most recent page rather than an arbitrary stale index.
+  useEffect(() => setPage(0), [region?.id, rangeDays]);
 
   const query = useAsync(async () => {
     if (!region) return { load: [], weather: [] };

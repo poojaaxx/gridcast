@@ -158,7 +158,7 @@ export default function Overview() {
                 loading={forecastQuery.loading}
               />
               <MetricCard
-                label="24h Forecast MAPE"
+                label="Overall Forecast MAPE"
                 value={bestModelSummary ? bestModelSummary.mape.toFixed(2) : "—"}
                 unit="%"
                 accent="amber"
