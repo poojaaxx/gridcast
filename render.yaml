@@ -1,0 +1,107 @@
+# Render Blueprint - deploys GridCast as three services on Render's free
+# tier: a static frontend, a FastAPI backend web service, and a background
+# worker running the continuous hourly pipeline. Postgres is NOT defined
+# here - GridCast uses Neon (https://neon.tech) for a genuinely persistent
+# free Postgres instead of Render's free Postgres, which auto-deletes after
+# 30 days + a 14-day grace period. See README "Production Deployment" for
+# the full manual setup (Neon project creation, Render account, and every
+# secret env var below marked `sync: false`, which Render will prompt for
+# once in the dashboard and never store in this file or in Git).
+#
+# To use: push this file to the repo, then in the Render dashboard choose
+# "New > Blueprint" and point it at this GitHub repository.
+
+services:
+  # --- Frontend: static site (no server needed for a pure Vite/React SPA) ---
+  - type: web
+    name: gridcast-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    plan: free
+    envVars:
+      # Baked into the build at build time (Vite convention) - must point at
+      # the backend service's actual public URL. Predictable from the
+      # backend service name below, but verify after first deploy in case
+      # Render assigned a different subdomain (e.g. the name was taken).
+      - key: VITE_API_BASE_URL
+        value: https://gridcast-backend.onrender.com
+    routes:
+      # SPA fallback: React Router needs every path to serve index.html.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  # --- Backend: FastAPI, Docker runtime (reuses the existing Dockerfile) ---
+  - type: web
+    name: gridcast-backend
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      # Frontend's actual public URL - no wildcard, required for
+      # allow_credentials=True CORS to work at all. Predictable from the
+      # frontend service name above; verify after first deploy.
+      - key: CORS_ORIGINS
+        value: https://gridcast-frontend.onrender.com
+      # Backend and frontend are on different onrender.com subdomains,
+      # which the browser treats as different sites (onrender.com is on the
+      # Public Suffix List) - SameSite=Lax would silently block the session
+      # cookie on cross-site fetch() calls, so this must be "none" (which
+      # requires Secure=true, already true since Render serves HTTPS).
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_SAMESITE
+        value: none
+      # LIVE mode - production must never default to synthetic data.
+      - key: ELECTRICITY_PROVIDER
+        value: real
+      - key: EIA_RESPONDENT_CODE
+        value: NYIS
+      # --- Secrets: Render prompts for these once during blueprint setup
+      # and stores them encrypted - never written to this file or Git. ---
+      - key: DATABASE_URL
+        sync: false # Neon connection string, e.g. postgresql://...neon.tech/gridcast?sslmode=require
+      - key: JWT_SECRET_KEY
+        sync: false # generate with `openssl rand -hex 32`
+      - key: GRIDCAST_ADMIN_USERNAME
+        sync: false
+      - key: GRIDCAST_ADMIN_PASSWORD
+        sync: false
+      - key: EIA_API_KEY
+        sync: false # free key from https://www.eia.gov/opendata/register.php
+
+  # --- Worker: continuous hourly pipeline (same image, different command) ---
+  - type: worker
+    name: gridcast-worker
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerCommand: sh -c "alembic upgrade head && python -m app.worker"
+    plan: free
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: ELECTRICITY_PROVIDER
+        value: real
+      - key: EIA_RESPONDENT_CODE
+        value: NYIS
+      # The worker never handles HTTP/auth, but Settings() is validated at
+      # import time regardless of entrypoint, so JWT_SECRET_KEY and
+      # DATABASE_URL are still required here even though the worker itself
+      # never issues a session token.
+      - key: DATABASE_URL
+        sync: false # same Neon connection string as the backend service
+      - key: JWT_SECRET_KEY
+        sync: false # same value as the backend service
+      - key: EIA_API_KEY
+        sync: false # same value as the backend service
